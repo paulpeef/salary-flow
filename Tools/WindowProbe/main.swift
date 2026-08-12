@@ -59,7 +59,11 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
         guard let content = window.contentView else { return }
         var widths: [String] = []
         func walk(_ view: NSView, depth: Int) {
-            if view is NSScrollView || view.className.contains("Divider") {
+            if let scroll = view as? NSScrollView {
+                widths.append("NSScrollView \(Int(view.frame.width))×\(Int(view.frame.height)) @x\(Int(view.frame.minX)) "
+                    + "| отступ сверху \(Int(scroll.contentInsets.top)) "
+                    + "| авто-отступ \(scroll.automaticallyAdjustsContentInsets)")
+            } else if view.className.contains("Divider") {
                 widths.append("\(view.className) \(Int(view.frame.width))×\(Int(view.frame.height)) @x\(Int(view.frame.minX))")
             }
             guard depth < 6 else { return }

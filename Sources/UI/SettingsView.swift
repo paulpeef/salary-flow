@@ -38,9 +38,6 @@ struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var section: SettingsSection
 
-    /// Высота полосы заголовка, под которой оказывается содержимое.
-    static let titlebarInset: CGFloat = 28
-
     init(model: AppModel, initialSection: SettingsSection = .money) {
         self.model = model
         _section = State(initialValue: initialSection)
@@ -56,18 +53,11 @@ struct SettingsView: View {
                 }
             }
             .listStyle(.sidebar)
-            // Заголовок окна скрыт, но полоса светофора осталась и лежит поверх
-            // содержимого: SwiftUI растягивает contentView на всю высоту окна.
-            // Отступ даём именно контенту прокрутки — safeAreaInset здесь ломает
-            // раскладку, раздувая колонку вдвое.
-            .contentMargins(.top, SettingsView.titlebarInset, for: .scrollContent)
             .frame(width: 190)
 
-            Divider()
-
             detail
-                .contentMargins(.top, SettingsView.titlebarInset, for: .scrollContent)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.background)
         }
         .frame(width: 700, height: 520)
         // Интерфейс русский, поэтому время показываем в 24-часовом формате,

@@ -10,11 +10,12 @@ mkdir -p "$(dirname "$OUT")"
 swiftc -parse-as-library -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.build/sparkle" \
   Sources/Model/Settings.swift Sources/Model/Engine.swift Sources/Model/Formatting.swift \
   Sources/Model/AppModel.swift Sources/UI/PanelView.swift Sources/UI/SettingsView.swift \
-  Sources/UI/MenuBarLabel.swift Sources/Support/AppDelegate.swift \
+  Sources/UI/MenuBarLabel.swift \
   Sources/Support/AppDelegate.swift \
   Sources/Support/LaunchAgent.swift \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift Sources/Support/PrivacyMonitor.swift \
+  Sources/Support/Updater.swift \
   Tools/WindowProbe/main.swift \
   -o .build/WindowProbe
 
