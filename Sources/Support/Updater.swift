@@ -16,18 +16,30 @@ final class Updater: ObservableObject {
     /// Когда проверяли в последний раз, по данным самого Sparkle.
     @Published private(set) var lastCheck: Date?
 
-    private let controller: SPUStandardUpdaterController
+    /// Пусто у вспомогательных инструментов: превью и зонд — это отдельные
+    /// исполняемые файлы без бандла, и запущенный в них Sparkle уходит проверять
+    /// обновления и подвешивает процесс. Проверено: рендер превью вставал намертво.
+    private let controller: SPUStandardUpdaterController?
 
     init() {
+        guard Bundle.main.bundleIdentifier != nil,
+              let feed = Bundle.main.infoDictionary?["SUFeedURL"] as? String,
+              !feed.isEmpty else {
+            controller = nil
+            return
+        }
         // Автоматическую проверку включаем не здесь, а по настройке пользователя.
         controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
-        lastCheck = controller.updater.lastUpdateCheckDate
-        Log.info("обновления: канал \(feedURL ?? "не задан")")
+        lastCheck = controller?.updater.lastUpdateCheckDate
+        Log.info("обновления: канал \(feed)")
     }
+
+    /// Доступно ли обновление в принципе — у инструментов сборки его нет.
+    var isAvailable: Bool { controller != nil }
 
     var feedURL: String? {
         Bundle.main.infoDictionary?["SUFeedURL"] as? String
@@ -40,9 +52,9 @@ final class Updater: ObservableObject {
     /// Проверять ли обновления самостоятельно. Sparkle хранит это у себя,
     /// поэтому отдельного поля в настройках приложения нет.
     var checksAutomatically: Bool {
-        get { controller.updater.automaticallyChecksForUpdates }
+        get { controller?.updater.automaticallyChecksForUpdates ?? false }
         set {
-            controller.updater.automaticallyChecksForUpdates = newValue
+            controller?.updater.automaticallyChecksForUpdates = newValue
             objectWillChange.send()
             Log.info("обновления: автопроверка \(newValue ? "включена" : "выключена")")
         }
@@ -51,7 +63,7 @@ final class Updater: ObservableObject {
     /// Проверка по кнопке: Sparkle сам покажет окно с описанием версии,
     /// скачает, заменит приложение и перезапустит его.
     func checkNow() {
-        guard !isChecking else { return }
+        guard let controller, !isChecking else { return }
         isChecking = true
         Log.info("обновления: проверка по кнопке")
         controller.updater.checkForUpdates()
@@ -61,7 +73,7 @@ final class Updater: ObservableObject {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
             self.isChecking = false
-            self.lastCheck = self.controller.updater.lastUpdateCheckDate
+            self.lastCheck = controller.updater.lastUpdateCheckDate
         }
     }
 }

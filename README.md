@@ -16,7 +16,7 @@
 ./Tools/preview.sh      # отрендерить интерфейс в PNG (.build/preview)
 ```
 
-Настройки лежат в `~/Library/Application Support/SalaryDrop/settings.json` —
+Настройки лежат в `~/Library/Application Support/SalaryFlow/settings.json` —
 обычный JSON, его можно править руками и класть в бэкап. Рядом `settings.backup.json`,
 снимок последнего удачного чтения.
 
@@ -24,7 +24,7 @@
 
 ## Журнал и живучесть
 
-Журнал: `~/Library/Logs/SalaryDrop/salarydrop.log`, дубль уходит в системный лог
+Журнал: `~/Library/Logs/SalaryFlow/salaryflow.log`, дубль уходит в системный лог
 для Console.app. Кнопки «Открыть» и «Показать в Finder» — на вкладке «Вид».
 
 Приложение отличает падение от закрытия: при старте кладётся метка `session.running`,
@@ -125,7 +125,7 @@ SalaryDrop: демонстрация экрана всегда начинает�
 
 ### Автозапуск
 
-Тумблер на вкладке «Вид». Он создаёт `~/Library/LaunchAgents/dev.local.salarydrop.plist`,
+Тумблер на вкладке «Вид». Он создаёт `~/Library/LaunchAgents/io.github.paulpeef.salaryflow.plist`,
 указывающий на **текущее** расположение приложения, — поэтому включать его имеет смысл
 только после `./build.sh --install`. Если запустить из `.build`, автозапуск сломается
 на первой же пересборке; приложение это замечает и предупреждает прямо в настройках.
@@ -169,6 +169,6 @@ Tools/RenderPreview/      оффскрин-рендер интерфейса в 
 * Приложение подписано ad-hoc — оно для себя, не для раздачи.
 * Автозапуск сделан через LaunchAgent, а не Service Management: на ad-hoc
   подписи последний капризничает. Плист лежит открытым текстом,
-  `~/Library/LaunchAgents/dev.local.salarydrop.plist`.
+  `~/Library/LaunchAgents/io.github.paulpeef.salaryflow.plist`.
 * Настоящим виджетом в Центре уведомлений это быть не может: WidgetKit не
   обновляется чаще, чем раз в несколько минут, и деньги не капали бы.

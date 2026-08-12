@@ -402,6 +402,10 @@ private struct AppearanceTab: View {
             }
 
             Section {
+                if !model.updater.isAvailable {
+                    Text("Проверка обновлений недоступна в этой сборке")
+                        .foregroundStyle(.secondary)
+                }
                 LabeledContent("Версия") {
                     Text(model.updater.currentVersion).monospacedDigit()
                 }
