@@ -18,6 +18,9 @@ final class AppModel: ObservableObject {
                 LaunchAgent.setEnabled(settings.launchAtLogin)
             }
             privacy.settings = settings
+            if settings.country != oldValue.country {
+                holidays.setCountry(settings.country)
+            }
             refresh()
         }
     }
@@ -34,6 +37,9 @@ final class AppModel: ObservableObject {
 
     /// Обновления через Sparkle — держим здесь, чтобы жил столько же, сколько приложение.
     let updater = Updater()
+
+    /// Производственный календарь выбранной страны.
+    let holidays: HolidayStore
 
     /// Итоговая причина, по которой цифры спрятаны.
     var privacyReason: PrivacyReason? {
@@ -62,7 +68,8 @@ final class AppModel: ObservableObject {
     init() {
         let loaded = store.settings
         settings = loaded
-        engine = Engine(settings: loaded)
+        holidays = HolidayStore(country: loaded.country)
+        engine = Engine(settings: loaded, publicHolidays: holidays.nationalDays)
         snapshot = engine.snapshot()
 
         NotificationCenter.default.addObserver(
@@ -87,8 +94,16 @@ final class AppModel: ObservableObject {
         if loaded.launchAtLogin != LaunchAgent.isEnabled {
             LaunchAgent.setEnabled(loaded.launchAtLogin)
         }
+        // Календарь мог устареть: даты мусульманских праздников уточняют,
+        // а переносы выходных в России выходят постановлением на каждый год.
+        holidays.refreshIfStale()
+        holidayUpdates = holidays.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
         refresh()
     }
+
+    private var holidayUpdates: AnyCancellable?
 
     /// Остановить время на заданном моменте — используется рендером превью.
     func overrideNow(_ date: Date?) {
@@ -96,13 +111,13 @@ final class AppModel: ObservableObject {
         timer?.invalidate()
         timer = nil
         currentInterval = 0
-        engine = Engine(settings: settings)
+        engine = Engine(settings: settings, publicHolidays: holidays.nationalDays)
         snapshot = engine.snapshot(now: date ?? Date())
         if date == nil { rescheduleTimer() }
     }
 
     func refresh() {
-        engine = Engine(settings: settings)
+        engine = Engine(settings: settings, publicHolidays: holidays.nationalDays)
         snapshot = engine.snapshot(now: frozenNow ?? Date())
         if frozenNow == nil { rescheduleTimer() }
     }

@@ -448,6 +448,122 @@ do {
     check("явно включённые копейки не сбрасываются при чтении", kept?.decimals == 2)
 }
 
+// MARK: - Государственные праздники
+
+do {
+    // 12 августа 2026 — среда. Делаем её государственным праздником.
+    let holidays: [DayStamp: String] = [DayStamp(year: 2026, month: 8, day: 12): "Проверочный день"]
+    let e = Engine(settings: baseSettings(), publicHolidays: holidays)
+    let snap = e.snapshot(now: moment(2026, 8, 12, 14, 0))
+
+    check("государственный праздник выпадает из нормы", snap.normDays == 20, "получено \(snap.normDays)")
+    check("в государственный праздник не капает", nearly(snap.todayEarned, 0))
+    check("состояние — праздник", snap.state == .holiday)
+    check("оклад от праздника не уменьшается", nearly(snap.monthProjected, 210_000),
+          "получено \(snap.monthProjected)")
+    check("дневная ставка выросла", nearly(snap.dailyRate, 210_000.0 / 20.0))
+}
+
+do {
+    // Праздник, попавший на выходной, ничего не меняет: он и так нерабочий.
+    let holidays: [DayStamp: String] = [DayStamp(year: 2026, month: 8, day: 15): "Суббота-праздник"]
+    let e = Engine(settings: baseSettings(), publicHolidays: holidays)
+    check("праздник на выходном норму не трогает",
+          e.snapshot(now: moment(2026, 8, 17, 12, 0)).normDays == 21)
+}
+
+do {
+    // Своя запись перекрывает производственный календарь: в праздник вышли работать.
+    var s = baseSettings()
+    s.ranges = [DayRange(from: DayStamp(year: 2026, month: 8, day: 12),
+                         to: DayStamp(year: 2026, month: 8, day: 12),
+                         kind: .extraWorkday)]
+    let holidays: [DayStamp: String] = [DayStamp(year: 2026, month: 8, day: 12): "Проверочный день"]
+    let e = Engine(settings: s, publicHolidays: holidays)
+    let snap = e.snapshot(now: moment(2026, 8, 12, 14, 0))
+    check("своя запись перекрывает государственный праздник", snap.state == .working)
+    check("норма вернулась к 21", snap.normDays == 21, "получено \(snap.normDays)")
+}
+
+// MARK: - Разбор календаря праздников
+
+do {
+    let sample = """
+    BEGIN:VCALENDAR
+    BEGIN:VEVENT
+    DTSTART;VALUE=DATE:20260831
+    SUMMARY:Malaysia's National Day
+    DESCRIPTION:Public holiday
+    END:VEVENT
+    BEGIN:VEVENT
+    DTSTART;VALUE=DATE:20260214
+    SUMMARY:Valentine's Day
+    DESCRIPTION:Observance
+    END:VEVENT
+    BEGIN:VEVENT
+    DTSTART;VALUE=DATE:20260201
+    SUMMARY:Thaipusam (regional holiday)
+    DESCRIPTION:Public holiday in Johor\\, Kedah
+    END:VEVENT
+    BEGIN:VEVENT
+    DTSTART;VALUE=DATE:20260825
+    SUMMARY:The Prophet Muhammad's Birthday (tentative)
+    DESCRIPTION:Public holiday\\nDate is tentative and may change
+    END:VEVENT
+    BEGIN:VEVENT
+    DTSTART;VALUE=DATE:20260101
+    SUMMARY:Новый Год
+    DESCRIPTION:Государственный праздник
+    END:VEVENT
+    END:VCALENDAR
+    """
+
+    let parsed = ICSParser.parse(sample)
+    check("разобрано четыре праздника, наблюдение отброшено", parsed.count == 4,
+          "получено \(parsed.count): \(parsed.map(\.name))")
+
+    let national = parsed.filter { $0.scope == .national }
+    check("национальных три", national.count == 3, "получено \(national.count)")
+
+    check("день святого Валентина не считается выходным",
+          !parsed.contains { $0.name.contains("Valentine") })
+
+    let regional = parsed.first { $0.scope == .regional }
+    check("региональный праздник опознан", regional?.name == "Thaipusam",
+          "получено \(regional?.name ?? "нет")")
+    check("регионы вытащены", regional?.regions.contains("Johor") == true,
+          "получено \(regional?.regions ?? "нет")")
+
+    check("пометка «дата уточняется» подхвачена",
+          parsed.contains { $0.isTentative && $0.name.contains("Prophet") })
+    check("из названия убрана служебная пометка",
+          parsed.contains { $0.name == "The Prophet Muhammad's Birthday" })
+
+    check("русский календарь разбирается тоже",
+          parsed.contains { $0.name == "Новый Год" && $0.scope == .national })
+
+    check("дата разобрана верно",
+          parsed.contains { $0.day == DayStamp(year: 2026, month: 8, day: 31) })
+}
+
+do {
+    // Настоящие снимки, вшитые в приложение: они не должны молча испортиться.
+    for (name, expected) in [("russia", "Россия"), ("malaysia", "Малайзия")] {
+        let path = "Resources/holidays-\(name).ics"
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+            check("снимок календаря \(expected) читается", false, "нет файла \(path)")
+            continue
+        }
+        let parsed = ICSParser.parse(text)
+        let national2026 = parsed.filter { $0.day.year == 2026 && $0.scope == .national }
+        check("снимок \(expected): есть праздники на 2026 год", national2026.count >= 8,
+              "получено \(national2026.count)")
+        let years = Set(parsed.map(\.day.year))
+        check("снимок \(expected): есть будущие годы", years.contains { $0 > 2026 },
+              "годы: \(years.sorted())")
+    }
+}
+
 // MARK: - Итог
 
 if failures.isEmpty {

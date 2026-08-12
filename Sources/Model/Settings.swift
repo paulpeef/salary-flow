@@ -207,6 +207,8 @@ struct AppSettings: Codable, Equatable {
     var monthlyAmount: Double = 150_000
     var hourlyAmount: Double = 1_500
     var currencyCode: String = "RUB"
+    /// Производственный календарь: чьи государственные праздники считать нерабочими.
+    var country: Country = .russia
     var customCurrencySymbol: String = ""
 
     // График
@@ -282,6 +284,7 @@ struct AppSettings: Codable, Equatable {
         monthlyAmount = c.value(.monthlyAmount, or: d.monthlyAmount)
         hourlyAmount = c.value(.hourlyAmount, or: d.hourlyAmount)
         currencyCode = c.value(.currencyCode, or: d.currencyCode)
+        country = c.value(.country, or: d.country)
         customCurrencySymbol = c.value(.customCurrencySymbol, or: d.customCurrencySymbol)
 
         workWeekdays = c.value(.workWeekdays, or: d.workWeekdays)

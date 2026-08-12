@@ -43,6 +43,7 @@ swiftc -parse-as-library -O \
   Sources/AppEntry.swift \
   Sources/Model/Settings.swift \
   Sources/Model/Engine.swift \
+  Sources/Model/Holidays.swift \
   Sources/Model/Formatting.swift \
   Sources/Model/AppModel.swift \
   Sources/UI/PanelView.swift \
@@ -57,6 +58,10 @@ swiftc -parse-as-library -O \
   -o "$APP/Contents/MacOS/$APP_NAME"
 
 # Фреймворк едет внутри бандла: rpath выше указывает именно сюда.
+# Снимки производственных календарей: с ними приложение знает праздники
+# сразу после установки, ещё до первого выхода в сеть.
+cp Resources/*.ics "$APP/Contents/Resources/"
+
 mkdir -p "$APP/Contents/Frameworks"
 cp -R "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/"
 

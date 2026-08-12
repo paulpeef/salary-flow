@@ -120,6 +120,10 @@ private struct MoneyTab: View {
 
                 TextField("Свой символ", text: $model.settings.customCurrencySymbol,
                           prompt: Text("необязательно, например ₽"))
+
+                Picker("Производственный календарь", selection: $model.settings.country) {
+                    ForEach(Country.allCases) { Text($0.title).tag($0) }
+                }
             } header: {
                 Text("Сколько платят")
             } footer: {
@@ -248,17 +252,24 @@ private struct SpecialDaysTab: View {
                         .frame(maxWidth: 320)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach($model.settings.ranges) { $range in
-                            RangeRow(range: $range, summary: summary(for: range)) {
-                                model.settings.ranges.removeAll { $0.id == range.id }
-                            }
+                .frame(maxWidth: .infinity)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Свои дни идут первыми: их добавляют руками и к ним возвращаются.
+                    ForEach($model.settings.ranges) { $range in
+                        RangeRow(range: $range, summary: summary(for: range)) {
+                            model.settings.ranges.removeAll { $0.id == range.id }
                         }
                     }
-                    .padding(12)
+
+                    if !model.settings.ranges.isEmpty {
+                        Divider().padding(.vertical, 4)
+                    }
+                    holidayCalendar
                 }
+                .padding(12)
             }
 
             Divider()
@@ -286,6 +297,104 @@ private struct SpecialDaysTab: View {
             }
             .padding(10)
         }
+    }
+
+    /// Государственные праздники страны: только смотреть. В расчёт идут
+    /// национальные; региональные показаны отдельно, потому что зависят
+    /// от штата, а штат приложение не знает — их добавляют себе вручную.
+    @ViewBuilder
+    private var holidayCalendar: some View {
+        let year = DayStamp(Date(), in: model.settings.calendar).year
+        let years = model.holidays.years.filter { $0 >= year }.prefix(3)
+
+        HStack {
+            Text("Праздники · \(model.settings.country.title)")
+                .font(.system(size: 12, weight: .semibold))
+            Spacer()
+            if let refreshed = model.holidays.lastRefresh {
+                Text("обновлено \(Fmt.shortDate(refreshed))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+
+        if years.isEmpty {
+            Text("Календарь не загружен")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+
+        ForEach(Array(years), id: \.self) { year in
+            let all = model.holidays.holidays(inYear: year)
+            let national = all.filter { $0.scope == .national }
+            let regional = all.filter { $0.scope == .regional }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(String(year))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                ForEach(national) { holiday in
+                    holidayRow(holiday, applied: true)
+                }
+
+                if !regional.isEmpty {
+                    DisclosureGroup("Региональные · \(Fmt.days(regional.count))") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(regional) { holiday in
+                                holidayRow(holiday, applied: false)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                    .font(.caption)
+                    .padding(.top, 2)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func holidayRow(_ holiday: PublicHoliday, applied: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(Fmt.day(holiday.day))
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 78, alignment: .leading)
+
+            Text(holiday.name)
+                .font(.system(size: 11))
+                .lineLimit(1)
+
+            if holiday.isTentative {
+                Text("дата уточняется")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+            }
+
+            Spacer()
+
+            if applied {
+                Text("учтён")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            } else {
+                Button("Добавить") { addHoliday(holiday) }
+                    .font(.system(size: 10))
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    /// Региональный праздник переносится к себе обычной записью —
+    /// дальше он живёт как любой другой особый день и его можно удалить.
+    private func addHoliday(_ holiday: PublicHoliday) {
+        guard !model.settings.ranges.contains(where: {
+            $0.kind == .holiday && $0.from == holiday.day && $0.to == holiday.day
+        }) else { return }
+        model.settings.ranges.append(
+            DayRange(from: holiday.day, to: holiday.day, kind: .holiday, note: holiday.name))
     }
 
     private func add(_ kind: DayKind) {

@@ -8,7 +8,7 @@ mkdir -p "$(dirname "$OUT")"
 ./Tools/fetch-sparkle.sh
 
 swiftc -parse-as-library -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.build/sparkle" \
-  Sources/Model/Settings.swift Sources/Model/Engine.swift Sources/Model/Formatting.swift \
+  Sources/Model/Settings.swift Sources/Model/Engine.swift Sources/Model/Holidays.swift Sources/Model/Formatting.swift \
   Sources/Model/AppModel.swift Sources/UI/PanelView.swift Sources/UI/SettingsView.swift \
   Sources/UI/MenuBarLabel.swift \
   Sources/Support/AppDelegate.swift \

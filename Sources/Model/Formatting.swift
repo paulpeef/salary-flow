@@ -59,6 +59,13 @@ enum Fmt {
         return f.string(from: date)
     }
 
+    static func shortDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "d MMMM"
+        return f.string(from: date)
+    }
+
     static func day(_ stamp: DayStamp) -> String {
         String(format: "%02d.%02d.%04d", stamp.day, stamp.month, stamp.year)
     }

@@ -59,6 +59,12 @@ struct Snapshot {
 struct Engine {
     var settings: AppSettings
 
+    /// Государственные праздники страны из производственного календаря.
+    /// Ведут себя как отмеченный вручную праздник: выпадают из нормы месяца,
+    /// оклад не уменьшают. Любая запись в «Особых днях» их перекрывает —
+    /// на праздник может выпасть рабочая смена, и решает это пользователь.
+    var publicHolidays: [DayStamp: String] = [:]
+
     private var calendar: Calendar { settings.calendar }
 
     // MARK: Классификация дней
@@ -81,6 +87,8 @@ struct Engine {
         switch override(for: day) {
         case .holiday: return false
         case .extraWorkday: return true
+        case .none:
+            if publicHolidays[day] != nil { return false }
         default: break
         }
         let date = day.startOfDay(in: calendar)
@@ -92,6 +100,7 @@ struct Engine {
         guard isEmployed(day) else { return .notEmployed }
         let kind = override(for: day)
         if kind == .holiday { return .holiday }
+        if kind == nil, publicHolidays[day] != nil { return .holiday }
         guard isNormDay(day) else { return .weekend }
         switch kind {
         case .vacation: return .paidLeave(.vacation)

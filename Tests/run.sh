@@ -9,6 +9,7 @@ mkdir -p "$BUILD"
 swiftc -O \
   Sources/Model/Settings.swift \
   Sources/Model/Engine.swift \
+  Sources/Model/Holidays.swift \
   Sources/Model/Formatting.swift \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift \
