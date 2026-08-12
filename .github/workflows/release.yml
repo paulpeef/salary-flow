@@ -78,10 +78,13 @@ jobs:
           git fetch origin main
           git checkout main
           cp .build/release/appcast.xml appcast.xml
-          if git diff --quiet appcast.xml; then
+          # Сравнивать надо после add: у неотслеживаемого файла `git diff`
+          # изменений не видит и молча возвращает успех. Первый релиз так
+          # и прошёл — appcast остался неопубликованным, а шаг отчитался зелёным.
+          git add appcast.xml
+          if git diff --cached --quiet; then
             echo "appcast не изменился"
           else
-            git add appcast.xml
             git commit -m "appcast для ${GITHUB_REF_NAME}"
             git push origin main
           fi
