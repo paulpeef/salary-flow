@@ -631,6 +631,30 @@ do {
           e2.snapshot(now: moment(2026, 1, 17, 14, 0)).state == .paidLeave(.vacation))
 }
 
+// MARK: - Значения по умолчанию для нового пользователя
+
+do {
+    let fresh = AppSettings()
+    let today = DayStamp(Date(), in: Calendar(identifier: .gregorian))
+
+    // Дата выхода на работу не должна быть зашита в код: однажды туда попала
+    // реальная дата владельца, и её увидел бы каждый, кто поставит приложение.
+    check("дата выхода на работу вычисляется, а не зашита",
+          fresh.employmentStart.year == today.year && fresh.employmentStart.month == today.month,
+          "получено \(Fmt.day(fresh.employmentStart))")
+    check("дата выхода — первое число месяца", fresh.employmentStart.day == 1)
+    check("дата увольнения не в прошлом", fresh.employmentEnd.year >= today.year)
+
+    // Ничего личного в значениях по умолчанию быть не должно.
+    check("особых дней по умолчанию нет", fresh.ranges.isEmpty)
+    check("свой символ валюты пуст", fresh.customCurrencySymbol.isEmpty)
+    check("своих процессов приватности нет", fresh.privacyExtraProcesses.isEmpty)
+    check("суммы не скрыты по умолчанию", fresh.hideAmount == false)
+    check("автозапуск по умолчанию выключен", fresh.launchAtLogin == false)
+    check("часовой пояс берётся с машины пользователя",
+          fresh.timeZoneID == TimeZone.current.identifier)
+}
+
 // MARK: - Итог
 
 if failures.isEmpty {

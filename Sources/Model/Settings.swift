@@ -34,6 +34,18 @@ struct DayStamp: Codable, Equatable, Comparable, Hashable {
     static func < (lhs: DayStamp, rhs: DayStamp) -> Bool {
         (lhs.year, lhs.month, lhs.day) < (rhs.year, rhs.month, rhs.day)
     }
+
+    /// Первое число текущего месяца — разумное «когда я вышел на работу»
+    /// по умолчанию для того, кто работает давно.
+    static var firstDayOfCurrentMonth: DayStamp {
+        let now = DayStamp(Date(), in: Calendar(identifier: .gregorian))
+        return DayStamp(year: now.year, month: now.month, day: 1)
+    }
+
+    static var lastDayOfCurrentYear: DayStamp {
+        DayStamp(year: DayStamp(Date(), in: Calendar(identifier: .gregorian)).year,
+                 month: 12, day: 31)
+    }
 }
 
 /// Время суток без даты — начало/конец рабочего дня, начало перерыва.
@@ -219,9 +231,14 @@ struct AppSettings: Codable, Equatable {
     var timeZoneID: String = TimeZone.current.identifier
 
     // Трудоустройство
-    var employmentStart: DayStamp = DayStamp(year: 2026, month: 8, day: 12)
+    //
+    // Даты вычисляются при первом запуске, а не зашиты в код: конкретное число
+    // в значении по умолчанию — это чья-то чужая дата выхода на работу, и новому
+    // пользователю она не подходит. Начало месяца выбрано потому, что большинство
+    // работает в компании давно: итог за текущий месяц сойдётся сразу, без правок.
+    var employmentStart: DayStamp = .firstDayOfCurrentMonth
     var hasEmploymentEnd: Bool = false
-    var employmentEnd: DayStamp = DayStamp(year: 2027, month: 12, day: 31)
+    var employmentEnd: DayStamp = .lastDayOfCurrentYear
 
     // База расчёта
     var rateBasis: RateBasis = .workingDaysInMonth
