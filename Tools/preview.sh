@@ -13,12 +13,13 @@ swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.b
   -target arm64-apple-macos14.0 \
   Sources/Model/Settings.swift \
   Sources/Model/Engine.swift \
-  Sources/Model/Holidays.swift \
+  Sources/Model/Holidays.swift Sources/Model/WorkCalendar.swift \
   Sources/Model/Formatting.swift \
   Sources/Model/AppModel.swift \
   Sources/UI/PanelView.swift \
   Sources/UI/SettingsView.swift \
   Sources/UI/MenuBarLabel.swift \
+  Sources/UI/CalendarGrid.swift \
   Sources/Support/AppDelegate.swift \
   Sources/Support/LaunchAgent.swift \
   Sources/Support/Migration.swift \

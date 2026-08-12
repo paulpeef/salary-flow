@@ -564,6 +564,73 @@ do {
     }
 }
 
+// MARK: - Карта переносов
+
+do {
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(identifier: "UTC")!
+
+    // Заглушка будущего года: сервис отдаёт одни нули, пока нет постановления.
+    // Принять её нельзя — все субботы и воскресенья стали бы рабочими.
+    let placeholder = String(repeating: "0", count: 365)
+    check("карта из одних нулей отвергается",
+          WorkCalendarParser.parse(placeholder, year: 2027, calendar: utc) == nil)
+
+    // Карта неверной длины — тоже мусор.
+    check("карта неверной длины отвергается",
+          WorkCalendarParser.parse("0101", year: 2026, calendar: utc) == nil)
+
+    // Настоящая карта: выходные по дням недели плюс новогодние каникулы.
+    var real = ""
+    let start = utc.date(from: DateComponents(year: 2026, month: 1, day: 1))!
+    for offset in 0..<365 {
+        let date = utc.date(byAdding: .day, value: offset, to: start)!
+        let weekday = utc.component(.weekday, from: date)
+        let stamp = DayStamp(date, in: utc)
+        // 1–9 января нерабочие, 17 января (суббота) — рабочая.
+        if stamp.month == 1 && stamp.day <= 9 { real += "1" }
+        else if stamp.month == 1 && stamp.day == 17 { real += "0" }
+        else if weekday == 1 || weekday == 7 { real += "1" }
+        else { real += "0" }
+    }
+
+    guard let map = WorkCalendarParser.parse(real, year: 2026, calendar: utc) else {
+        check("настоящая карта принимается", false, "разбор вернул nil")
+        exit(1)
+    }
+    check("настоящая карта принимается", true)
+    check("новогодние каникулы попали в нерабочие",
+          map.dayOff.contains(DayStamp(year: 2026, month: 1, day: 5)))
+    check("рабочая суббота опознана",
+          map.workday.contains(DayStamp(year: 2026, month: 1, day: 17)),
+          "рабочих выходных: \(map.workday.count)")
+    check("обычная суббота рабочей не считается",
+          !map.workday.contains(DayStamp(year: 2026, month: 1, day: 24)))
+
+    // Движок с этой картой: рабочая суббота входит в норму и в ней капает.
+    var s = baseSettings()
+    s.employmentStart = DayStamp(year: 2020, month: 1, day: 1)
+    let e = Engine(settings: s, officialDaysOff: map.dayOff, officialWorkdays: map.workday)
+    let snap = e.snapshot(now: moment(2026, 1, 17, 14, 0))
+    check("в рабочую субботу капает", snap.state == .working, "состояние \(snap.state)")
+    check("рабочая суббота входит в норму января", e.isNormDay(DayStamp(year: 2026, month: 1, day: 17)))
+    check("новогодние каникулы из нормы выпали",
+          !e.isNormDay(DayStamp(year: 2026, month: 1, day: 5)))
+
+    // Норма января 2026 по этой карте: будни минус каникулы плюс рабочая суббота.
+    let january = e.normDays(inMonthOf: DayStamp(year: 2026, month: 1, day: 15))
+    check("норма января посчитана по карте", january == 16, "получено \(january)")
+
+    // Своя запись всё равно главнее производственного календаря.
+    var withOverride = s
+    withOverride.ranges = [DayRange(from: DayStamp(year: 2026, month: 1, day: 17),
+                                    to: DayStamp(year: 2026, month: 1, day: 17),
+                                    kind: .vacation)]
+    let e2 = Engine(settings: withOverride, officialDaysOff: map.dayOff, officialWorkdays: map.workday)
+    check("свой отпуск перекрывает рабочую субботу",
+          e2.snapshot(now: moment(2026, 1, 17, 14, 0)).state == .paidLeave(.vacation))
+}
+
 // MARK: - Итог
 
 if failures.isEmpty {

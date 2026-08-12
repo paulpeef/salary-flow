@@ -33,6 +33,21 @@ enum Country: String, Codable, CaseIterable, Identifiable {
     var feedURL: URL? {
         URL(string: "https://calendar.google.com/calendar/ical/\(calendarID)/public/basic.ics")
     }
+
+    /// Код страны для isdayoff.ru — сервиса, который ведёт карту переносов.
+    /// У Малайзии переносов в нашем смысле нет: праздник, попавший на воскресенье,
+    /// просто получает замещающий день, и он уже размечен в календаре праздников.
+    var workCalendarCode: String? {
+        switch self {
+        case .russia: return "ru"
+        case .malaysia: return nil
+        }
+    }
+
+    func workCalendarURL(year: Int) -> URL? {
+        guard let code = workCalendarCode else { return nil }
+        return URL(string: "https://isdayoff.ru/api/getdata?year=\(year)&cc=\(code)")
+    }
 }
 
 // MARK: - Праздник
@@ -144,19 +159,43 @@ private func < (lhs: (DayStamp, String), rhs: (DayStamp, String)) -> Bool {
 final class HolidayStore: ObservableObject {
     @Published private(set) var holidays: [PublicHoliday] = []
     @Published private(set) var lastRefresh: Date?
+    /// Карты годов с переносами. Пусто — значит считаем по дням недели.
+    @Published private(set) var yearMaps: [Int: YearMap] = [:]
 
     private var country: Country
     private static let refreshInterval: TimeInterval = 7 * 24 * 3600
 
+    private let calendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return c
+    }()
+
     init(country: Country) {
         self.country = country
         load()
+        loadYearMaps()
     }
+
+    /// Официально нерабочие дни всех известных годов.
+    var officialDaysOff: Set<DayStamp> {
+        yearMaps.values.reduce(into: Set<DayStamp>()) { $0.formUnion($1.dayOff) }
+    }
+
+    /// Рабочие субботы и воскресенья.
+    var officialWorkdays: Set<DayStamp> {
+        yearMaps.values.reduce(into: Set<DayStamp>()) { $0.formUnion($1.workday) }
+    }
+
+    /// Годы, для которых карта переносов известна.
+    var mappedYears: [Int] { yearMaps.keys.sorted() }
 
     func setCountry(_ new: Country) {
         guard new != country else { return }
         country = new
+        yearMaps = [:]
         load()
+        loadYearMaps()
         refreshIfStale()
     }
 
@@ -190,6 +229,56 @@ final class HolidayStore: ObservableObject {
         Bundle.main.url(forResource: "holidays-\(country.slug)", withExtension: "ics")
     }
 
+    private func yearMapCacheURL(_ year: Int) -> URL {
+        HolidayStore.cacheDirectory.appendingPathComponent("workdays-\(country.slug)-\(year).txt")
+    }
+
+    private func yearMapBundledURL(_ year: Int) -> URL? {
+        Bundle.main.url(forResource: "workdays-\(country.slug)-\(year)", withExtension: "txt")
+    }
+
+    /// Интересуют текущий год и следующий: дальше данных обычно ещё нет.
+    private var relevantYears: [Int] {
+        let year = Calendar(identifier: .gregorian).component(.year, from: Date())
+        return [year, year + 1]
+    }
+
+    private func loadYearMaps() {
+        guard country.workCalendarCode != nil else { return }
+        for year in relevantYears {
+            for url in [yearMapCacheURL(year), yearMapBundledURL(year)].compactMap({ $0 }) {
+                guard let text = try? String(contentsOf: url, encoding: .utf8),
+                      let map = WorkCalendarParser.parse(text, year: year, calendar: calendar) else { continue }
+                yearMaps[year] = map
+                Log.info("календарь переносов \(country.title) \(year): \(map.dayOff.count) нерабочих, \(map.workday.count) рабочих выходных")
+                break
+            }
+        }
+    }
+
+    private func refreshYearMaps() async {
+        guard country.workCalendarCode != nil else { return }
+        for year in relevantYears {
+            guard let url = country.workCalendarURL(year: year) else { continue }
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let text = String(data: data, encoding: .utf8) else { continue }
+                guard let map = WorkCalendarParser.parse(text, year: year, calendar: calendar) else {
+                    // Год ещё не размечен: сервис отдаёт заглушку из нулей.
+                    // Молча остаёмся на дне недели плюс праздники.
+                    Log.info("календарь переносов \(country.title) \(year): данных пока нет")
+                    continue
+                }
+                try? data.write(to: yearMapCacheURL(year), options: .atomic)
+                yearMaps[year] = map
+                Log.info("календарь переносов \(country.title) \(year): обновлён, \(map.workday.count) рабочих выходных")
+            } catch {
+                Log.warn("календарь переносов \(country.title) \(year): \(error.localizedDescription)")
+            }
+        }
+    }
+
     private func load() {
         // Скачанный календарь свежее вшитого, поэтому он и первый в очереди.
         for url in [cacheURL, bundledURL].compactMap({ $0 }) {
@@ -209,7 +298,10 @@ final class HolidayStore: ObservableObject {
     func refreshIfStale() {
         let age = lastRefresh.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
         guard age > HolidayStore.refreshInterval else { return }
-        Task { await refresh() }
+        Task {
+            await refresh()
+            await refreshYearMaps()
+        }
     }
 
     func refresh() async {

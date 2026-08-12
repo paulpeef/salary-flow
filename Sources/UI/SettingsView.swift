@@ -299,96 +299,80 @@ private struct SpecialDaysTab: View {
         }
     }
 
-    /// Государственные праздники страны: только смотреть. В расчёт идут
-    /// национальные; региональные показаны отдельно, потому что зависят
-    /// от штата, а штат приложение не знает — их добавляют себе вручную.
+    /// Производственный календарь: сетка месяцев вместо списка дат.
+    /// Списком полсотни праздников не читаются, а на сетке сразу видно
+    /// форму месяца — где каникулы, где перенос, где отпуск.
     @ViewBuilder
     private var holidayCalendar: some View {
-        let year = DayStamp(Date(), in: model.settings.calendar).year
-        let years = model.holidays.years.filter { $0 >= year }.prefix(3)
-
-        HStack {
-            Text("Праздники · \(model.settings.country.title)")
+        HStack(spacing: 8) {
+            Text("Производственный календарь · \(model.settings.country.title)")
                 .font(.system(size: 12, weight: .semibold))
             Spacer()
             if let refreshed = model.holidays.lastRefresh {
-                Text("обновлено \(Fmt.shortDate(refreshed))")
+                Text("обновлён \(Fmt.shortDate(refreshed))")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
 
-        if years.isEmpty {
-            Text("Календарь не загружен")
-                .font(.caption).foregroundStyle(.secondary)
-        }
+        CalendarGrid(model: model)
 
-        ForEach(Array(years), id: \.self) { year in
-            let all = model.holidays.holidays(inYear: year)
-            let national = all.filter { $0.scope == .national }
-            let regional = all.filter { $0.scope == .regional }
+        legend
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(String(year))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                ForEach(national) { holiday in
-                    holidayRow(holiday, applied: true)
-                }
-
-                if !regional.isEmpty {
-                    DisclosureGroup("Региональные · \(Fmt.days(regional.count))") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(regional) { holiday in
-                                holidayRow(holiday, applied: false)
-                            }
+        let regional = upcomingRegional
+        if !regional.isEmpty {
+            DisclosureGroup("Региональные праздники · \(Fmt.days(regional.count))") {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(regional) { holiday in
+                        HStack(spacing: 8) {
+                            Text(Fmt.day(holiday.day))
+                                .font(.system(size: 11)).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .frame(width: 78, alignment: .leading)
+                            Text(holiday.name).font(.system(size: 11)).lineLimit(1)
+                            Spacer()
+                            Button("Добавить") { addHoliday(holiday) }
+                                .font(.system(size: 10))
+                                .buttonStyle(.borderless)
                         }
-                        .padding(.top, 4)
                     }
-                    .font(.caption)
-                    .padding(.top, 2)
+                    Text("Зависят от штата, поэтому сами не применяются — добавьте те, что касаются вас.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
+                .padding(.top, 6)
             }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            .font(.caption)
         }
     }
 
-    private func holidayRow(_ holiday: PublicHoliday, applied: Bool) -> some View {
-        HStack(spacing: 8) {
-            Text(Fmt.day(holiday.day))
-                .font(.system(size: 11))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 78, alignment: .leading)
-
-            Text(holiday.name)
-                .font(.system(size: 11))
-                .lineLimit(1)
-
-            if holiday.isTentative {
-                Text("дата уточняется")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-            }
-
+    private var legend: some View {
+        HStack(spacing: 12) {
+            legendItem("рабочий", .green.opacity(0.16))
+            legendItem("выходной", .primary.opacity(0.05))
+            legendItem("праздник", .orange.opacity(0.20))
+            legendItem("отпуск", .teal.opacity(0.20))
+            legendItem("больничный", .blue.opacity(0.18))
             Spacer()
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(.secondary)
+    }
 
-            if applied {
-                Text("учтён")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            } else {
-                Button("Добавить") { addHoliday(holiday) }
-                    .font(.system(size: 10))
-                    .buttonStyle(.borderless)
-            }
+    private func legendItem(_ title: String, _ color: Color) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 3).fill(color).frame(width: 12, height: 12)
+            Text(title)
         }
     }
 
-    /// Региональный праздник переносится к себе обычной записью —
-    /// дальше он живёт как любой другой особый день и его можно удалить.
+    /// Региональные праздники начиная с сегодняшнего дня — прошедшие не нужны.
+    private var upcomingRegional: [PublicHoliday] {
+        let today = DayStamp(Date(), in: model.settings.calendar)
+        return model.holidays.holidays
+            .filter { $0.scope == .regional && $0.day >= today }
+            .prefix(12)
+            .map { $0 }
+    }
+
     private func addHoliday(_ holiday: PublicHoliday) {
         guard !model.settings.ranges.contains(where: {
             $0.kind == .holiday && $0.from == holiday.day && $0.to == holiday.day

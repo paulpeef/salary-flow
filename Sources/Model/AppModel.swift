@@ -69,7 +69,9 @@ final class AppModel: ObservableObject {
         let loaded = store.settings
         settings = loaded
         holidays = HolidayStore(country: loaded.country)
-        engine = Engine(settings: loaded, publicHolidays: holidays.nationalDays)
+        engine = Engine(settings: loaded, publicHolidays: holidays.nationalDays,
+                        officialDaysOff: holidays.officialDaysOff,
+                        officialWorkdays: holidays.officialWorkdays)
         snapshot = engine.snapshot()
 
         NotificationCenter.default.addObserver(
@@ -105,19 +107,30 @@ final class AppModel: ObservableObject {
 
     private var holidayUpdates: AnyCancellable?
 
+    /// Как выглядит конкретный день по текущим настройкам и календарю.
+    /// Календарю нужен тот же расчёт, что и счётчику, — чтобы сетка
+    /// не разошлась с деньгами.
+    func engineSnapshotState(for day: DayStamp) -> DayState {
+        engine.state(of: day, now: frozenNow ?? Date())
+    }
+
     /// Остановить время на заданном моменте — используется рендером превью.
     func overrideNow(_ date: Date?) {
         frozenNow = date
         timer?.invalidate()
         timer = nil
         currentInterval = 0
-        engine = Engine(settings: settings, publicHolidays: holidays.nationalDays)
+        engine = Engine(settings: settings, publicHolidays: holidays.nationalDays,
+                        officialDaysOff: holidays.officialDaysOff,
+                        officialWorkdays: holidays.officialWorkdays)
         snapshot = engine.snapshot(now: date ?? Date())
         if date == nil { rescheduleTimer() }
     }
 
     func refresh() {
-        engine = Engine(settings: settings, publicHolidays: holidays.nationalDays)
+        engine = Engine(settings: settings, publicHolidays: holidays.nationalDays,
+                        officialDaysOff: holidays.officialDaysOff,
+                        officialWorkdays: holidays.officialWorkdays)
         snapshot = engine.snapshot(now: frozenNow ?? Date())
         if frozenNow == nil { rescheduleTimer() }
     }

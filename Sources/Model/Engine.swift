@@ -65,6 +65,13 @@ struct Engine {
     /// на праздник может выпасть рабочая смена, и решает это пользователь.
     var publicHolidays: [DayStamp: String] = [:]
 
+    /// Официально нерабочие дни из производственного календаря — вместе
+    /// с перенесёнными. Решается постановлением, вывести из дня недели нельзя.
+    var officialDaysOff: Set<DayStamp> = []
+
+    /// Рабочие субботы и воскресенья оттуда же.
+    var officialWorkdays: Set<DayStamp> = []
+
     private var calendar: Calendar { settings.calendar }
 
     // MARK: Классификация дней
@@ -84,13 +91,20 @@ struct Engine {
     /// Входит ли день в норму рабочих дней месяца.
     /// Норма не зависит от даты трудоустройства и от отпусков — это календарь компании.
     func isNormDay(_ day: DayStamp) -> Bool {
+        // Отвечают на вопрос «рабочий ли это день вообще» только два вида записей.
+        // Отпуск и больничный ставятся НА рабочий день, а не отменяют его —
+        // иначе отпуск, выпавший на рабочую субботу, терялся бы.
         switch override(for: day) {
         case .holiday: return false
         case .extraWorkday: return true
-        case .none:
-            if publicHolidays[day] != nil { return false }
         default: break
         }
+
+        // Производственный календарь главнее дня недели: он знает переносы.
+        if officialWorkdays.contains(day) { return true }
+        if officialDaysOff.contains(day) { return false }
+        if publicHolidays[day] != nil { return false }
+
         let date = day.startOfDay(in: calendar)
         let weekday = calendar.component(.weekday, from: date)
         return settings.workWeekdays.contains(weekday)
@@ -100,7 +114,7 @@ struct Engine {
         guard isEmployed(day) else { return .notEmployed }
         let kind = override(for: day)
         if kind == .holiday { return .holiday }
-        if kind == nil, publicHolidays[day] != nil { return .holiday }
+        if kind == nil, publicHolidays[day] != nil, !officialWorkdays.contains(day) { return .holiday }
         guard isNormDay(day) else { return .weekend }
         switch kind {
         case .vacation: return .paidLeave(.vacation)

@@ -19,4 +19,13 @@ fetch() {
 
 fetch russia  "ru.russian%23holiday%40group.v.calendar.google.com"
 fetch malaysia "en.malaysia%23holiday%40group.v.calendar.google.com"
+# Карта переносов на текущий год: с ней приложение знает рабочие субботы
+# сразу после установки. Будущие годы подтягиваются само́й программой,
+# когда выйдет постановление — обновлять её для этого не требуется.
+YEAR=$(date +%Y)
+echo "→ карта переносов Россия $YEAR"
+curl -fsSL --max-time 60 "https://isdayoff.ru/api/getdata?year=$YEAR&cc=ru" \
+  -o "Resources/workdays-russia-$YEAR.txt"
+echo "  дней: $(wc -c < "Resources/workdays-russia-$YEAR.txt" | tr -d ' ')"
+
 echo "✓ Снимки обновлены"
