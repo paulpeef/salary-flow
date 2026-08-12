@@ -401,6 +401,27 @@ private struct AppearanceTab: View {
                 .foregroundStyle(.secondary)
             }
 
+            Section {
+                LabeledContent("Версия") {
+                    Text(model.updater.currentVersion).monospacedDigit()
+                }
+                Toggle("Проверять обновления автоматически", isOn: Binding(
+                    get: { model.updater.checksAutomatically },
+                    set: { model.updater.checksAutomatically = $0 }
+                ))
+                LabeledContent("Обновление") {
+                    Button(model.updater.isChecking ? "Проверяю…" : "Проверить сейчас") {
+                        model.updater.checkNow()
+                    }
+                    .disabled(model.updater.isChecking)
+                }
+            } header: {
+                Text("Обновления")
+            } footer: {
+                Text("Обновления берутся из релизов на GitHub и проверяются подписью: приложение установит только то, что подписано ключом автора. Подпись Apple у сборки самодельная, поэтому при первом запуске скачанной версии система спросит подтверждение.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Файлы") {
                 LabeledContent("Настройки") {
                     Button("Показать в Finder") {

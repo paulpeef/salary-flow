@@ -32,6 +32,9 @@ final class AppModel: ObservableObject {
 
     private let privacy = PrivacyMonitor()
 
+    /// Обновления через Sparkle — держим здесь, чтобы жил столько же, сколько приложение.
+    let updater = Updater()
+
     /// Итоговая причина, по которой цифры спрятаны.
     var privacyReason: PrivacyReason? {
         if settings.hideAmount { return .manual }

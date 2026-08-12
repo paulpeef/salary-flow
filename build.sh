@@ -8,7 +8,11 @@ cd "$(dirname "$0")"
 
 APP_NAME="SalaryFlow"
 BUNDLE_ID="io.github.paulpeef.salaryflow"
-VERSION="1.0"
+VERSION="${VERSION:-1.0}"
+FEED_URL="https://raw.githubusercontent.com/paulpeef/salary-flow/main/appcast.xml"
+# Публичный ключ проверки обновлений. Приватный лежит в связке ключей
+# разработчика и в секретах репозитория — сюда он не попадает никогда.
+SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-oHSDimtXW5KkFmck6f786b9x//NPa6Zgat0oSw0qzOE=}"
 BUILD_DIR=".build"
 APP="$BUILD_DIR/$APP_NAME.app"
 
@@ -22,6 +26,9 @@ for arg in "$@"; do
   esac
 done
 
+./Tools/fetch-sparkle.sh
+SPARKLE=".build/sparkle"
+
 echo "→ Тесты расчётного ядра"
 ./Tests/run.sh
 
@@ -30,6 +37,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 swiftc -parse-as-library -O \
+  -F "$SPARKLE" -framework Sparkle \
+  -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -target arm64-apple-macos14.0 \
   Sources/AppEntry.swift \
   Sources/Model/Settings.swift \
@@ -44,7 +53,12 @@ swiftc -parse-as-library -O \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift \
   Sources/Support/PrivacyMonitor.swift \
+  Sources/Support/Updater.swift \
   -o "$APP/Contents/MacOS/$APP_NAME"
+
+# Фреймворк едет внутри бандла: rpath выше указывает именно сюда.
+mkdir -p "$APP/Contents/Frameworks"
+cp -R "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -61,6 +75,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHumanReadableCopyright</key><string>Личный инструмент, без гарантий</string>
+  <key>SUFeedURL</key><string>$FEED_URL</string>
+  <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
+  <key>SUEnableInstallerLauncherService</key><false/>
 </dict>
 </plist>
 PLIST

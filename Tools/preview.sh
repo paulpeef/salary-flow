@@ -7,7 +7,9 @@ cd "$(dirname "$0")/.."
 OUT="${1:-.build/preview}"
 mkdir -p "$OUT" .build
 
-swiftc -O \
+./Tools/fetch-sparkle.sh
+
+swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.build/sparkle" \
   -target arm64-apple-macos14.0 \
   Sources/Model/Settings.swift \
   Sources/Model/Engine.swift \
@@ -21,6 +23,7 @@ swiftc -O \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift \
   Sources/Support/PrivacyMonitor.swift \
+  Sources/Support/Updater.swift \
   Tools/RenderPreview/main.swift \
   -o .build/RenderPreview
 

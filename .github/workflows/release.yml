@@ -1,0 +1,87 @@
+name: Релиз
+
+# Собирает приложение и публикует его, когда появляется тег вида v1.2.
+# Ручной запуск оставлен для проверки сборки без публикации.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия из тега
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" == v* ]]; then
+            echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=0.0.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Тесты и сборка
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: ./build.sh
+
+      - name: Упаковка
+        id: package
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          mkdir -p .build/release
+          # ditto, а не zip: сохраняет ресурсные вилки и симлинки внутри бандла,
+          # без них подписанный фреймворк на другой машине не запустится.
+          ditto -c -k --sequesterRsrc --keepParent \
+            .build/SalaryFlow.app ".build/release/SalaryFlow-$VERSION.zip"
+          echo "zip=.build/release/SalaryFlow-$VERSION.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Подпись обновления и appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::error::Нет секрета SPARKLE_PRIVATE_KEY — обновления подписать нечем."
+            exit 1
+          fi
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_key
+          .build/sparkle/bin/generate_appcast \
+            --ed-key-file /tmp/sparkle_key \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/" \
+            .build/release
+          rm -f /tmp/sparkle_key
+          cp .build/release/appcast.xml appcast.xml
+          cat appcast.xml
+
+      - name: Публикация релиза
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Salary Flow $GITHUB_REF_NAME" \
+            --notes "Скачайте архив, распакуйте и перенесите Salary Flow в «Программы». При первом запуске — правый клик по приложению и «Открыть»: сборка подписана самодельной подписью, без сертификата Apple." \
+            "${{ steps.package.outputs.zip }}"
+
+      - name: Обновление appcast в main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          cp .build/release/appcast.xml appcast.xml
+          if git diff --quiet appcast.xml; then
+            echo "appcast не изменился"
+          else
+            git add appcast.xml
+            git commit -m "appcast для ${GITHUB_REF_NAME}"
+            git push origin main
+          fi
