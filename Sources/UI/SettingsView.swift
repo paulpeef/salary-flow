@@ -176,16 +176,26 @@ private struct ScheduleTab: View {
     var body: some View {
         Form {
             Section("Рабочие дни недели") {
+                // Заливку рисуем сами, а не через .tint у .bordered: системная
+                // подсветка на macOS 26 перестала отличать выбранное от невыбранного,
+                // и по кнопкам было не понять, какие дни рабочие.
                 HStack(spacing: 6) {
                     ForEach(weekdayOrder, id: \.0) { day, title in
                         let on = model.settings.workWeekdays.contains(day)
-                        Button(title) {
+                        Button {
                             if on { model.settings.workWeekdays.remove(day) }
                             else { model.settings.workWeekdays.insert(day) }
+                        } label: {
+                            Text(title)
+                                .font(.system(size: 12, weight: on ? .semibold : .regular))
+                                .frame(width: 34, height: 26)
+                                .background(on ? Color.accentColor : Color.primary.opacity(0.07),
+                                            in: RoundedRectangle(cornerRadius: 6))
+                                .foregroundStyle(on ? Color.white : Color.secondary)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(on ? .accentColor : .secondary)
-                        .foregroundStyle(on ? Color.accentColor : Color.secondary)
+                        .buttonStyle(.plain)
+                        .help(on ? "\(title) — рабочий, нажмите чтобы сделать выходным"
+                                 : "\(title) — выходной, нажмите чтобы сделать рабочим")
                     }
                 }
             }
