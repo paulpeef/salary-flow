@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="SalaryFlow"
 BUNDLE_ID="io.github.paulpeef.salaryflow"
-VERSION="${VERSION:-1.0}"
+VERSION="${VERSION:-1.1}"
 FEED_URL="https://raw.githubusercontent.com/paulpeef/salary-flow/main/appcast.xml"
 # Публичный ключ проверки обновлений. Приватный лежит в связке ключей
 # разработчика и в секретах репозитория — сюда он не попадает никогда.
@@ -61,7 +61,7 @@ swiftc -parse-as-library -O \
 # Фреймворк едет внутри бандла: rpath выше указывает именно сюда.
 # Снимки производственных календарей: с ними приложение знает праздники
 # сразу после установки, ещё до первого выхода в сеть.
-cp Resources/*.ics "$APP/Contents/Resources/"
+cp Resources/* "$APP/Contents/Resources/"
 
 mkdir -p "$APP/Contents/Frameworks"
 cp -R "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/"
