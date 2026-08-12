@@ -1,0 +1,442 @@
+import Combine
+import Foundation
+
+// MARK: - Примитивы
+
+/// Дата без времени и часового пояса. Храним именно так, чтобы перевод часов,
+/// переезд между таймзонами и смена системного календаря не сдвигали
+/// «дату выхода на работу» и границы отпуска.
+struct DayStamp: Codable, Equatable, Comparable, Hashable {
+    var year: Int
+    var month: Int
+    var day: Int
+
+    init(year: Int, month: Int, day: Int) {
+        self.year = year
+        self.month = month
+        self.day = day
+    }
+
+    init(_ date: Date, in calendar: Calendar) {
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        self.init(year: c.year ?? 1970, month: c.month ?? 1, day: c.day ?? 1)
+    }
+
+    /// Начало этих суток в заданном календаре.
+    func startOfDay(in calendar: Calendar) -> Date {
+        var c = DateComponents()
+        c.year = year
+        c.month = month
+        c.day = day
+        return calendar.date(from: c) ?? Date(timeIntervalSince1970: 0)
+    }
+
+    static func < (lhs: DayStamp, rhs: DayStamp) -> Bool {
+        (lhs.year, lhs.month, lhs.day) < (rhs.year, rhs.month, rhs.day)
+    }
+}
+
+/// Время суток без даты — начало/конец рабочего дня, начало перерыва.
+struct TimeOfDay: Codable, Equatable, Hashable {
+    var hour: Int
+    var minute: Int
+
+    var minutesFromMidnight: Int { hour * 60 + minute }
+
+    init(hour: Int, minute: Int) {
+        self.hour = max(0, min(23, hour))
+        self.minute = max(0, min(59, minute))
+    }
+}
+
+// MARK: - Особые дни
+
+enum DayKind: String, Codable, CaseIterable, Identifiable {
+    /// Отпуск: оплачивается по дневной ставке, работать не надо.
+    case vacation
+    /// Больничный: здесь считаем как оплачиваемый по дневной ставке.
+    case sickLeave
+    /// Отгул за свой счёт: день из нормы не выпадает, но и не оплачивается.
+    case unpaid
+    /// Нерабочий праздник: выпадает из нормы месяца, оклад не уменьшает.
+    case holiday
+    /// Рабочая суббота: обычный оплачиваемый рабочий день вне графика недели.
+    case extraWorkday
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .vacation: return "Отпуск"
+        case .sickLeave: return "Больничный"
+        case .unpaid: return "За свой счёт"
+        case .holiday: return "Праздник"
+        case .extraWorkday: return "Рабочий выходной"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .vacation: return "Оплачивается по дневной ставке, работать не нужно"
+        case .sickLeave: return "Оплачивается по дневной ставке, работать не нужно"
+        case .unpaid: return "Не оплачивается, месячная сумма уменьшается"
+        case .holiday: return "Выходной для всех, на сумму оклада не влияет"
+        case .extraWorkday: return "Обычный рабочий день, даже если это выходной"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .vacation: return "beach.umbrella"
+        case .sickLeave: return "cross.case"
+        case .unpaid: return "minus.circle"
+        case .holiday: return "party.popper"
+        case .extraWorkday: return "hammer"
+        }
+    }
+}
+
+/// Диапазон особых дней (включительно с обеих сторон).
+struct DayRange: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var from: DayStamp
+    var to: DayStamp
+    var kind: DayKind
+    var note: String = ""
+
+    func contains(_ day: DayStamp) -> Bool {
+        let lo = min(from, to)
+        let hi = max(from, to)
+        return day >= lo && day <= hi
+    }
+
+    init(id: UUID = UUID(), from: DayStamp, to: DayStamp, kind: DayKind, note: String = "") {
+        self.id = id
+        self.from = from
+        self.to = to
+        self.kind = kind
+        self.note = note
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Даты обязательны — без них запись бессмысленна; остальное восстановимо.
+        from = try c.decode(DayStamp.self, forKey: .from)
+        to = try c.decode(DayStamp.self, forKey: .to)
+        id = c.value(.id, or: UUID())
+        kind = c.value(.kind, or: .vacation)
+        note = c.value(.note, or: "")
+    }
+}
+
+/// Читает поле, а если его нет или оно испорчено — подставляет значение по умолчанию.
+///
+/// Синтезированный Swift'ом `Decodable` не умеет использовать значения по умолчанию:
+/// отсутствие ключа — это ошибка, роняющая разбор всего файла целиком. Из-за этого
+/// добавление любого нового поля обнуляло пользователю все настройки разом.
+extension KeyedDecodingContainer {
+    func value<T: Decodable>(_ key: Key, or fallback: T) -> T {
+        // try? схлопывает T?? в T?: отсутствие ключа и ошибка разбора
+        // приводят к одному и тому же — берём значение по умолчанию.
+        (try? decodeIfPresent(T.self, forKey: key)) ?? fallback
+    }
+}
+
+// MARK: - Режимы расчёта
+
+enum SalaryMode: String, Codable, CaseIterable, Identifiable {
+    case monthly
+    case hourly
+    var id: String { rawValue }
+    var title: String { self == .monthly ? "Оклад в месяц" : "Ставка в час" }
+}
+
+enum RateBasis: String, Codable, CaseIterable, Identifiable {
+    /// Дневная ставка = оклад / норма рабочих дней конкретного месяца.
+    case workingDaysInMonth
+    /// Дневная ставка = оклад / фиксированное число дней (например, 21).
+    case fixedDays
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .workingDaysInMonth: return "Норма рабочих дней месяца"
+        case .fixedDays: return "Фиксированное число дней"
+        }
+    }
+}
+
+/// Что делать со счётчиком, когда экран могут видеть посторонние.
+enum PrivacyAction: String, Codable, CaseIterable, Identifiable {
+    /// Значок остаётся, цифры исчезают.
+    case mask
+    /// Пункт меню-бара пропадает целиком.
+    case hide
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .mask: return "Убрать цифры, оставить значок"
+        case .hide: return "Убрать из меню-бара совсем"
+        }
+    }
+}
+
+enum IdleDisplay: String, Codable, CaseIterable, Identifiable {
+    case icon
+    case dayTotal
+    case monthTotal
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .icon: return "Только значок"
+        case .dayTotal: return "Итог дня"
+        case .monthTotal: return "Итог месяца"
+        }
+    }
+}
+
+// MARK: - Настройки
+
+struct AppSettings: Codable, Equatable {
+    /// Версия формата файла. Растёт, когда меняется смысл существующих полей;
+    /// добавление новых полей версию не меняет — их подхватывает терпимый разбор.
+    var schemaVersion: Int = AppSettings.currentSchemaVersion
+    static let currentSchemaVersion = 2
+
+    // Деньги
+    var mode: SalaryMode = .monthly
+    var monthlyAmount: Double = 150_000
+    var hourlyAmount: Double = 1_500
+    var currencyCode: String = "RUB"
+    var customCurrencySymbol: String = ""
+
+    // График
+    /// Дни недели по нумерации Calendar: 1 = воскресенье … 7 = суббота.
+    var workWeekdays: Set<Int> = [2, 3, 4, 5, 6]
+    var dayStart = TimeOfDay(hour: 10, minute: 0)
+    var dayEnd = TimeOfDay(hour: 19, minute: 0)
+    var timeZoneID: String = TimeZone.current.identifier
+
+    // Трудоустройство
+    var employmentStart: DayStamp = DayStamp(year: 2026, month: 8, day: 12)
+    var hasEmploymentEnd: Bool = false
+    var employmentEnd: DayStamp = DayStamp(year: 2027, month: 12, day: 31)
+
+    // База расчёта
+    var rateBasis: RateBasis = .workingDaysInMonth
+    var fixedDaysPerMonth: Int = 21
+
+    // Особые дни
+    var ranges: [DayRange] = []
+
+    // Отображение
+    /// Копейки по умолчанию выключены: на счётчике в меню-баре они дают
+    /// мельтешение младших разрядов и мешают читать сумму. Кому нужно —
+    /// включает на вкладке «Вид».
+    var decimals: Int = 0
+    var idleDisplay: IdleDisplay = .icon
+    var hideAmount: Bool = false
+    var showIcon: Bool = true
+    var launchAtLogin: Bool = false
+
+    // Приватность
+    var privacyOnCamera: Bool = true
+    var privacyOnCapture: Bool = true
+    var privacyAction: PrivacyAction = .mask
+    /// Дополнительные имена процессов, добавленные пользователем.
+    var privacyExtraProcesses: [String] = []
+
+    /// Процессы, чьё присутствие означает, что экран куда-то уходит.
+    ///
+    /// Здесь только те, что появляются на время сеанса и исчезают после него.
+    /// Программы удалённого доступа (AnyDesk, TeamViewer, RuDesktop) сюда
+    /// сознательно не входят: их агенты висят в фоне круглосуточно, и счётчик
+    /// спрятался бы навсегда. Проверено на этой машине — `rudesktop_agent`
+    /// работает всё время, хотя никто никуда не подключён.
+    static let defaultCaptureProcesses = [
+        "CptHost",          // Zoom: демонстрация экрана
+        "zcscpthost",       // Zoom: он же в новых сборках
+        "screencapture",    // встроенные скриншоты и запись экрана
+        "screencaptureui",
+        "screensharingd"    // «Общий экран» macOS, поднимается на время сеанса
+    ]
+
+    var captureProcessNames: [String] {
+        AppSettings.defaultCaptureProcesses + privacyExtraProcesses
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    init() {}
+
+    /// Разбор, переживающий любые изменения формата: каждое поле читается
+    /// отдельно и при отсутствии или порче откатывается к значению по умолчанию.
+    /// Настройки пользователя не должны теряться из-за того, что в программе
+    /// появилась новая галочка.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = AppSettings()
+
+        schemaVersion = c.value(.schemaVersion, or: 0)
+
+        mode = c.value(.mode, or: d.mode)
+        monthlyAmount = c.value(.monthlyAmount, or: d.monthlyAmount)
+        hourlyAmount = c.value(.hourlyAmount, or: d.hourlyAmount)
+        currencyCode = c.value(.currencyCode, or: d.currencyCode)
+        customCurrencySymbol = c.value(.customCurrencySymbol, or: d.customCurrencySymbol)
+
+        workWeekdays = c.value(.workWeekdays, or: d.workWeekdays)
+        dayStart = c.value(.dayStart, or: d.dayStart)
+        dayEnd = c.value(.dayEnd, or: d.dayEnd)
+        timeZoneID = c.value(.timeZoneID, or: d.timeZoneID)
+
+        employmentStart = c.value(.employmentStart, or: d.employmentStart)
+        hasEmploymentEnd = c.value(.hasEmploymentEnd, or: d.hasEmploymentEnd)
+        employmentEnd = c.value(.employmentEnd, or: d.employmentEnd)
+
+        rateBasis = c.value(.rateBasis, or: d.rateBasis)
+        fixedDaysPerMonth = c.value(.fixedDaysPerMonth, or: d.fixedDaysPerMonth)
+        ranges = c.value(.ranges, or: d.ranges)
+
+        decimals = c.value(.decimals, or: d.decimals)
+        idleDisplay = c.value(.idleDisplay, or: d.idleDisplay)
+        hideAmount = c.value(.hideAmount, or: d.hideAmount)
+        showIcon = c.value(.showIcon, or: d.showIcon)
+        launchAtLogin = c.value(.launchAtLogin, or: d.launchAtLogin)
+
+        privacyOnCamera = c.value(.privacyOnCamera, or: d.privacyOnCamera)
+        privacyOnCapture = c.value(.privacyOnCapture, or: d.privacyOnCapture)
+        privacyAction = c.value(.privacyAction, or: d.privacyAction)
+        privacyExtraProcesses = c.value(.privacyExtraProcesses, or: d.privacyExtraProcesses)
+    }
+
+    var timeZone: TimeZone { TimeZone(identifier: timeZoneID) ?? .current }
+
+    var calendar: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = timeZone
+        return c
+    }
+
+    /// Длительность рабочего дня в секундах.
+    /// Если конец раньше начала — смена считается ночной и переходит через полночь.
+    ///
+    /// Перерыва в расчёте нет намеренно: он каждый день в разное время, а на сумму
+    /// за день и за месяц всё равно не влияет — дневная ставка берётся из оклада
+    /// и нормы дней. Перерыв менял лишь форму кривой внутри дня и цифру «в час».
+    var paidSecondsPerDay: TimeInterval {
+        var span = TimeInterval(dayEnd.minutesFromMidnight - dayStart.minutesFromMidnight) * 60
+        if span <= 0 { span += 24 * 3600 }
+        return max(60, span)
+    }
+}
+
+// MARK: - Хранилище
+
+/// Настройки лежат обычным JSON-файлом — их можно править руками
+/// и складывать в бэкап, не выковыривая из UserDefaults.
+final class SettingsStore: ObservableObject {
+    @Published var settings: AppSettings {
+        didSet { if settings != oldValue { save() } }
+    }
+
+    /// Путь можно переопределить переменной окружения — этим пользуются
+    /// инструменты предпросмотра, чтобы не трогать боевые настройки.
+    static let fileURL: URL = {
+        if let custom = ProcessInfo.processInfo.environment["SALARYFLOW_SETTINGS"], !custom.isEmpty {
+            return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
+        }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("SalaryFlow/settings.json")
+    }()
+
+    /// Копия последнего успешно прочитанного файла — страховка на случай,
+    /// если основной окажется испорчен.
+    static var backupURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("settings.backup.json")
+    }
+
+    init() {
+        // Настройки могли остаться от прежнего имени приложения — сначала переезд.
+        _ = Migration.performed
+        settings = SettingsStore.loadFromDisk()
+        if !FileManager.default.fileExists(atPath: SettingsStore.fileURL.path) {
+            save()   // первый запуск: файл должно быть видно и можно править руками
+        } else {
+            SettingsStore.refreshBackup()
+            if settings.schemaVersion != AppSettings.currentSchemaVersion {
+                // Файл от прежней версии дописываем до текущего формата,
+                // сохранив всё, что в нём было.
+                Log.info("файл настроек обновлён с версии \(settings.schemaVersion) до \(AppSettings.currentSchemaVersion)")
+                var upgraded = settings
+                if upgraded.schemaVersion < 2, upgraded.decimals != 0 {
+                    // Копейки стали выключены по умолчанию — переводим и тех,
+                    // у кого они остались от прежней версии.
+                    upgraded.decimals = 0
+                    Log.info("копейки на счётчике выключены (их можно вернуть на вкладке «Вид»)")
+                }
+                upgraded.schemaVersion = AppSettings.currentSchemaVersion
+                settings = upgraded
+            }
+        }
+    }
+
+    private static func decode(_ url: URL) throws -> AppSettings {
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(AppSettings.self, from: data)
+    }
+
+    /// Настройки не должны теряться молча: испорченный файл откладывается в сторону,
+    /// в дело идёт резервная копия, и всё это попадает в журнал.
+    private static func loadFromDisk() -> AppSettings {
+        let exists = FileManager.default.fileExists(atPath: fileURL.path)
+
+        if exists {
+            do {
+                let loaded = try decode(fileURL)
+                Log.info("настройки прочитаны: \(fileURL.path), версия формата \(loaded.schemaVersion)")
+                return loaded
+            } catch {
+                let stamp = ISO8601DateFormatter().string(from: Date())
+                    .replacingOccurrences(of: ":", with: "-")
+                let quarantine = fileURL.deletingLastPathComponent()
+                    .appendingPathComponent("settings-broken-\(stamp).json")
+                try? FileManager.default.moveItem(at: fileURL, to: quarantine)
+                Log.error("не удалось прочитать настройки (\(error)); файл отложен в \(quarantine.lastPathComponent)")
+            }
+        }
+
+        if FileManager.default.fileExists(atPath: backupURL.path), let restored = try? decode(backupURL) {
+            Log.warn("настройки восстановлены из резервной копии")
+            return restored
+        }
+
+        if exists {
+            Log.error("резервной копии тоже нет — настройки сброшены на значения по умолчанию")
+        } else {
+            Log.info("файла настроек нет, это первый запуск")
+        }
+        return AppSettings()
+    }
+
+    private static func refreshBackup() {
+        try? FileManager.default.removeItem(at: backupURL)
+        try? FileManager.default.copyItem(at: fileURL, to: backupURL)
+    }
+
+    private func save() {
+        let dir = SettingsStore.fileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        do {
+            let data = try encoder.encode(settings)
+            try data.write(to: SettingsStore.fileURL, options: .atomic)
+        } catch {
+            Log.error("не удалось сохранить настройки: \(error)")
+        }
+    }
+}
