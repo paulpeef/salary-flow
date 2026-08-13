@@ -3,13 +3,13 @@
     <channel>
         <title>SalaryFlow</title>
         <item>
-            <title>1.3</title>
-            <pubDate>Wed, 12 Aug 2026 14:26:01 +0000</pubDate>
-            <sparkle:version>1.3</sparkle:version>
-            <sparkle:shortVersionString>1.3</sparkle:shortVersionString>
+            <title>1.4</title>
+            <pubDate>Thu, 13 Aug 2026 07:24:10 +0000</pubDate>
+            <sparkle:version>1.4</sparkle:version>
+            <sparkle:shortVersionString>1.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/paulpeef/salary-flow/releases/download/v1.3/SalaryFlow-1.3.zip" length="1422449" type="application/octet-stream" sparkle:edSignature="pXSo35BcCnRRHw4W4N0BmN4iAewDoNW1XLU/+lvGDq9853v+OL/oEZJD9J0Q6zs4IChUo4mFd766tG98jyMHCA=="/>
+            <enclosure url="https://github.com/paulpeef/salary-flow/releases/download/v1.4/SalaryFlow-1.4.zip" length="1423420" type="application/octet-stream" sparkle:edSignature="bRSnwR20VJxJWPicL2MjH9lTKQh/XxMF8Mt9mRIkZkL4AORO3DEiurkJJ8CNzU2Bhy4sHGV9ghLMBW7AvUftDw=="/>
         </item>
     </channel>
 </rss>
