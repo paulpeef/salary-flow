@@ -18,4 +18,6 @@ swiftc -O \
   Tests/main.swift \
   -o "$BUILD/EngineTests"
 
-SALARYFLOW_LOG_DIR="$(mktemp -d)/logs" "$BUILD/EngineTests"
+SALARYFLOW_LOG_DIR="$(mktemp -d)/logs" \
+SALARYFLOW_MOOD="$(mktemp -d)/test-mood.json" \
+"$BUILD/EngineTests"

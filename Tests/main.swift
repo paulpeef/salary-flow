@@ -702,6 +702,81 @@ do {
     check("через полночь — разные заходы", MoodStats.groupIntoCheckIns(overnight).count == 2)
 }
 
+// MARK: - Настроение: что делает нажатие
+
+do {
+    let tired = moodEntry(.tired, 2026, 8, 12, 15, 0)
+    let good = moodEntry(.good, 2026, 8, 12, 15, 1)
+
+    check("нажатие на пустом месте добавляет отметку",
+          MoodTap.decide(kind: .tired, open: []) == .add)
+    check("нажатие на выделенной плашке снимает отметку",
+          MoodTap.decide(kind: .tired, open: [tired]) == .remove(tired.id))
+
+    // Запрет на смешивание хорошего с плохим убран: он гасил плашку молча,
+    // и выглядело это как «не даёт выбрать несколько».
+    check("хорошее рядом с плохим разрешено",
+          MoodTap.decide(kind: .good, open: [tired]) == .add)
+    check("плохое рядом с хорошим разрешено",
+          MoodTap.decide(kind: .tired, open: [good]) == .add)
+    check("третья жалоба к двум прежним разрешена",
+          MoodTap.decide(kind: .nervous, open: [tired, good]) == .add)
+    check("снимается именно нажатая отметка, а не первая по списку",
+          MoodTap.decide(kind: .good, open: [tired, good]) == .remove(good.id))
+
+    // Смесь считается средним, а не отбрасывается.
+    let mixed = MoodStats.groupIntoCheckIns([moodEntry(.flow, 2026, 8, 12, 15, 0),
+                                            moodEntry(.tired, 2026, 8, 12, 15, 4)])
+    check("«в потоке» и «устал» вместе — один заход", mixed.count == 1)
+    check("смесь хорошего и плохого даёт середину", nearly(mixed[0].index, 62.5),
+          "получено \(mixed[0].index)")
+}
+
+// MARK: - Настроение: окно исправления и повторы
+
+do {
+    let entries = [moodEntry(.tired, 2026, 8, 12, 15, 0)]
+
+    check("сразу после отметки её ещё можно снять",
+          MoodRules.openForUndo(entries, now: moment(2026, 8, 12, 15, 1)).count == 1)
+    check("через двадцать минут снимать уже нечего",
+          MoodRules.openForUndo(entries, now: moment(2026, 8, 12, 15, 20)).isEmpty)
+
+    // Главное, ради чего окна разведены: то же состояние можно отметить снова,
+    // а не только снять. Иначе выделенная плашка запирала повтор.
+    let openLater = MoodRules.openForUndo(entries, now: moment(2026, 8, 12, 15, 20))
+    check("через двадцать минут «устал» отмечается заново",
+          MoodTap.decide(kind: .tired, open: openLater) == .add)
+
+    check("окно исправления короче окна захода",
+          MoodRules.undoWindow < MoodRules.checkInWindow)
+
+    // Часы могли перевести назад, а файл — поправить руками. Отметка из
+    // будущего не должна выглядеть как «сделана только что».
+    let ahead = [moodEntry(.tired, 2026, 8, 12, 15, 0),
+                 moodEntry(.quit, 2026, 8, 12, 18, 0)]
+    let openNow = MoodRules.openForUndo(ahead, now: moment(2026, 8, 12, 15, 1))
+    check("отметка из будущего не считается выделенной",
+          openNow.map(\.kind) == [.tired], "получено \(openNow.map(\.kind.rawValue))")
+
+    // Повтор попадает в число отметок, но не удваивает тяжесть дня:
+    // состояние-то одно.
+    let repeated = [moodEntry(.tired, 2026, 8, 12, 15, 0),
+                    moodEntry(.tired, 2026, 8, 12, 15, 20)]
+    let stats = MoodStats.build(entries: repeated, now: moment(2026, 8, 12, 18, 0),
+                               window: .week, calendar: moodCalendar)
+    check("повтор считается в отметках", stats.marks == 2)
+    check("повтор не удваивает вес состояния", stats.checkIns.count == 1)
+    check("индекс от повтора не проседает", nearly(stats.index ?? 0, 25),
+          "получено \(stats.index ?? -1)")
+
+    // А через полчаса это уже другой заход: человек вернулся и отметился снова.
+    let farApart = [moodEntry(.tired, 2026, 8, 12, 12, 0),
+                    moodEntry(.tired, 2026, 8, 12, 17, 0)]
+    check("отметки через пять часов — два захода",
+          MoodStats.groupIntoCheckIns(farApart).count == 2)
+}
+
 // MARK: - Настроение: окна и разрезы
 
 do {

@@ -15,10 +15,22 @@ struct MoodBlock: View {
         let hidden = model.amountsHidden
 
         VStack(alignment: .leading, spacing: 7) {
-            Text("Как вы себя чувствуете?")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+            // Подсказка «можно несколько» стоит в заголовке, а не в подсказке
+            // при наведении: правило, о котором узнают только мышкой, — это
+            // правило, о котором не узнают. Строка одна и та же всегда,
+            // поэтому высоту блока она не двигает.
+            HStack(spacing: 6) {
+                Text("Как вы себя чувствуете?")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                Spacer()
+                Text("можно несколько")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            .lineLimit(1)
+            .help("Отметок можно поставить сколько нужно, и одно состояние можно отмечать хоть каждый час — как часто вы об этом вспоминаете, тоже данные. Пара минут после отметки плашка остаётся выделенной: нажатие в это время снимает её, если нажали не то.")
 
             // Плашки раскладываются всегда, даже когда спрятаны: их раскладка
             // задаёт высоту блока, а высота панели должна быть постоянной —
@@ -42,6 +54,12 @@ struct MoodBlock: View {
                 chip(kind, selected: marks.contains(kind))
             }
         }
+    }
+
+    /// Подсказка на плашке. У выделенной она говорит про снятие, потому что
+    /// именно это нажатие и сделает, — а выделение живёт всего пару минут.
+    private func chipHint(_ kind: MoodKind, selected: Bool) -> String {
+        selected ? "\(kind.hint) — нажмите, чтобы снять отметку" : kind.hint
     }
 
     private func chip(_ kind: MoodKind, selected: Bool) -> some View {
@@ -69,7 +87,7 @@ struct MoodBlock: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help(selected ? "\(kind.hint) — нажмите, чтобы снять отметку" : kind.hint)
+        .help(chipHint(kind, selected: selected))
     }
 
     private var privacyPlaceholder: some View {
@@ -110,6 +128,7 @@ struct MoodBlock: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .help("Последняя сегодняшняя отметка. Отметиться снова можно в любой момент — то же состояние тоже.")
             }
         }
         .lineLimit(1)

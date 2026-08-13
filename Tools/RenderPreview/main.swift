@@ -95,7 +95,8 @@ func demoMoodEntries(reference: Date) -> [MoodEntry] {
         let kind = pool[random(pool.count)]
         let hour = kind.isPositive ? 11 + random(3) : 15 + random(4)
         let minute = random(60)
-        guard let at = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) else { continue }
+        guard let at = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day),
+              at <= reference else { continue }   // «сегодня» кончается на моменте превью
         let minuteOfDay = hour * 60 + minute
         let fraction = min(1, max(0, Double(minuteOfDay - 600) / 540))
 
@@ -112,9 +113,10 @@ func demoMoodEntries(reference: Date) -> [MoodEntry] {
         }
     }
 
-    // Свежая отметка, чтобы на панели было видно выбранное состояние
-    // и строку «отмечено в».
-    let recent = reference.addingTimeInterval(-8 * 60)
+    // Отметка минуту назад: на панели «14:37» она попадает в окно исправления
+    // и видна выделенной, а на вечерней панели того же дня подсветка уже снята,
+    // но «отмечено в» осталось — обе половины правила видно в рендере.
+    let recent = reference.addingTimeInterval(-60)
     let parts = calendar.dateComponents([.hour, .minute, .weekday], from: recent)
     entries.append(MoodEntry(at: recent, kind: .tired, day: DayStamp(recent, in: calendar),
                              minuteOfDay: (parts.hour ?? 0) * 60 + (parts.minute ?? 0),

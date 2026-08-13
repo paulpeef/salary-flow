@@ -119,32 +119,35 @@ final class AppModel: ObservableObject {
 
     // MARK: Отметки настроения
 
-    /// Отметки текущего захода: их панель подсвечивает как выбранные.
+    /// Отметки, которые панель подсвечивает: только те, что ещё можно снять.
+    /// Через несколько минут подсветка гаснет — и то же состояние можно
+    /// отметить снова, а не только снять.
     func currentMoodMarks() -> [MoodKind] {
-        mood.currentCheckIn(now: frozenNow ?? Date()).map(\.kind)
+        mood.marksOpenForUndo(now: frozenNow ?? Date()).map(\.kind)
     }
 
-    /// Момент последней отметки — панель показывает его как «отмечено в 14:32».
+    /// Момент последней сегодняшней отметки — панель показывает его
+    /// как «отмечено в 14:32».
     func lastMoodMark() -> Date? {
-        mood.currentCheckIn(now: frozenNow ?? Date()).map(\.at).max()
+        let now = frozenNow ?? Date()
+        return mood.lastMark(on: DayStamp(now, in: settings.calendar), notAfter: now)?.at
     }
 
     /// Нажатие на плашку в панели.
     ///
     /// Пока не вышло окно захода, нажатие правит уже сделанную отметку, а не
     /// заводит новую: иначе каждое «ой, не то» оставалось бы в истории навсегда
-    /// и портило статистику. Хорошее и плохое вместе не живут — выбор одного
-    /// снимает другое, чтобы индекс не складывался из взаимных опровержений.
+    /// и портило статистику. Само решение — в `MoodTap`, чтобы правило было
+    /// одно и проверялось тестами.
     func toggleMood(_ kind: MoodKind) {
         let now = frozenNow ?? Date()
-        let checkIn = mood.currentCheckIn(now: now)
 
-        if let existing = checkIn.first(where: { $0.kind == kind }) {
-            mood.remove(id: existing.id)
+        switch MoodTap.decide(kind: kind, open: mood.marksOpenForUndo(now: now)) {
+        case .remove(let id):
+            mood.remove(id: id)
             return
-        }
-        for entry in checkIn where entry.kind.isPositive != kind.isPositive {
-            mood.remove(id: entry.id)
+        case .add:
+            break
         }
 
         let calendar = settings.calendar
