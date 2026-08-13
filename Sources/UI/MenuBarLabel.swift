@@ -14,9 +14,29 @@ struct MenuBarLabel: View {
                 Image(systemName: model.amountsHidden ? "drop"
                       : (s.state == .working ? "drop.fill" : "drop"))
             }
-            if let text = labelText(snapshot: s) {
-                Text(text).monospacedDigit()
+            // Пока панель открыта, ширина значка не должна меняться: она задаёт
+            // точку, к которой панель прицеплена, и от скачка ширины панель
+            // уезжает вбок. Поэтому на время открытой панели держим место
+            // под самое длинное значение — невидимый образец задаёт ширину.
+            ZStack(alignment: .trailing) {
+                if model.panelIsOpen {
+                    Text(widestText(snapshot: s))
+                        .monospacedDigit()
+                        .hidden()
+                }
+                if let text = labelText(snapshot: s) {
+                    Text(text).monospacedDigit()
+                }
             }
+        }
+    }
+
+    /// Самая длинная строка, которую значок покажет сегодня: по ней и меряем.
+    private func widestText(snapshot s: Snapshot) -> String {
+        let money = MoneyFormatter(settings: model.settings)
+        switch model.settings.idleDisplay {
+        case .monthTotal: return money.string(max(s.monthEarned, s.monthProjected))
+        default: return money.string(max(s.todayEarned, s.todayFull))
         }
     }
 

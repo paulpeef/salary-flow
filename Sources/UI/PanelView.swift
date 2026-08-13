@@ -14,9 +14,6 @@ struct PanelView: View {
 
         VStack(alignment: .leading, spacing: 14) {
             statusRow(s)
-            if let reason = model.privacyReason {
-                privacyBanner(reason)
-            }
             monthBlock(s)
             Divider()
             todayBlock(s)
@@ -27,10 +24,9 @@ struct PanelView: View {
         }
         .padding(14)
         .frame(width: 300)
-        // Появление и исчезновение баннера меняет высоту окна. Анимировать
-        // это нельзя: окно меню-бара перерисовывает подложку не в такт
-        // с содержимым, и позади панели остаётся ползающий светлый прямоугольник.
-        // Пусть размер меняется одним шагом.
+        // Высота панели теперь постоянна, но подстраховка остаётся: любое
+        // изменение размера должно происходить одним шагом, иначе окно
+        // меню-бара перерисовывает подложку не в такт с содержимым.
         .transaction { $0.animation = nil }
         .environment(\.locale, Locale(identifier: "ru_RU"))
         // Плавное перекатывание цифр — ради него всё и затевалось.
@@ -41,20 +37,29 @@ struct PanelView: View {
 
     // MARK: Состояние
 
+    /// Высота панели должна быть постоянной. Отдельный баннер приватности её
+    /// менял, а окно меню-бара оставляет подложку прежнего размера — отсюда
+    /// светлый прямоугольник позади панели. Поэтому причина живёт в строке
+    /// состояния, которая есть всегда, а действие — на кнопке-глазе внизу.
     private func statusRow(_ s: Snapshot) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: s.state.symbol)
-                .foregroundStyle(s.state == .working ? Color.green : .secondary)
-            Text(s.state.title)
+        let privacy = model.privacyReason
+
+        return HStack(spacing: 6) {
+            Image(systemName: privacy != nil ? "eye.slash" : s.state.symbol)
+                .foregroundStyle(privacy != nil ? Color.orange
+                                 : (s.state == .working ? Color.green : .secondary))
+            Text(privacy.map(shortPrivacyTitle) ?? s.state.title)
                 .font(.system(size: 12, weight: .medium))
-            if let note = activeNote(s), !note.isEmpty {
+                .foregroundStyle(privacy != nil ? Color.orange : .primary)
+                .lineLimit(1)
+            if privacy == nil, let note = activeNote(s), !note.isEmpty {
                 Text("· \(note)")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer()
-            if s.state.isWorkday, let start = s.shiftStart, let end = s.shiftEnd {
+            if privacy == nil, s.state.isWorkday, let start = s.shiftStart, let end = s.shiftEnd {
                 Text("\(Fmt.clock(start, timeZone: model.settings.timeZone))–\(Fmt.clock(end, timeZone: model.settings.timeZone))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -71,30 +76,21 @@ struct PanelView: View {
 
     // MARK: Приватность
 
-    private func privacyBanner(_ reason: PrivacyReason) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "eye.slash")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Приватный режим")
-                    .font(.system(size: 11, weight: .medium))
-                Text(reason.title)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer()
-            if reason == .manual {
-                Button("Показать") { model.settings.hideAmount = false }
-                    .controlSize(.small)
-            } else {
-                Button("Показать") { model.temporaryReveal = true }
-                    .controlSize(.small)
-                    .help("До конца звонка — потом спрячется снова")
-            }
+    /// Подпись к кнопке-глазу зависит от того, кто спрятал суммы.
+    private var eyeHint: String {
+        if model.settings.hideAmount { return "Показать суммы" }
+        if model.detectedPrivacy != nil {
+            return model.temporaryReveal ? "Спрятать снова" : "Показать до конца звонка"
         }
-        .padding(8)
-        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        return "Скрыть суммы (для демонстрации экрана)"
+    }
+
+    private func shortPrivacyTitle(_ reason: PrivacyReason) -> String {
+        switch reason {
+        case .manual: return "Суммы скрыты"
+        case .camera: return "Скрыто: включена камера"
+        case .capture: return "Скрыто: идёт захват экрана"
+        }
     }
 
     // MARK: Месяц — главный блок
@@ -209,11 +205,19 @@ struct PanelView: View {
             Spacer()
 
             Button {
-                model.settings.hideAmount.toggle()
+                // Ручное скрытие снимаем настройкой, автоматическое — временным
+                // показом до конца звонка: настройка тут ни при чём.
+                if model.settings.hideAmount {
+                    model.settings.hideAmount = false
+                } else if model.detectedPrivacy != nil {
+                    model.temporaryReveal.toggle()
+                } else {
+                    model.settings.hideAmount = true
+                }
             } label: {
                 Image(systemName: model.amountsHidden ? "eye.slash" : "eye")
             }
-            .help(model.amountsHidden ? "Показать суммы" : "Скрыть суммы (для демонстрации экрана)")
+            .help(eyeHint)
 
             Button {
                 NSApplication.shared.terminate(nil)
