@@ -199,6 +199,7 @@ extension MoodKind {
         case .hard: return .orange
         case .bored: return .gray
         case .nervous: return .purple
+        case .homeSoon: return .blue
         case .quit: return .red
         }
     }

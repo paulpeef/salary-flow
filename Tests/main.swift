@@ -681,6 +681,9 @@ do {
     check("индекс «устал» = 25", nearly(MoodKind.tired.index, 25))
     check("положительных состояний ровно два",
           MoodKind.allCases.filter(\.isPositive).count == 2)
+    check("«скорее бы домой» весит как скука, а не как желание уйти",
+          nearly(MoodKind.homeSoon.index, MoodKind.bored.index)
+          && MoodKind.homeSoon.index > MoodKind.quit.index)
     check("первым в списке идёт «всё хорошо»", MoodKind.allCases.first == .good,
           "получено \(MoodKind.allCases.first?.rawValue ?? "—")")
 
@@ -879,6 +882,25 @@ do {
           quitInsights.contains { $0.text.contains("Настроение тяжёлое") })
     check("серия тяжёлых дней найдена", quitStats.worstStreak >= 3,
           "получено \(quitStats.worstStreak)")
+
+    // «Скорее бы домой» значит разное утром и вечером — вывод должен различать.
+    var morning: [MoodEntry] = []
+    for day in [3, 4, 5, 6, 10] { morning.append(moodEntry(.homeSoon, 2026, 8, day, 11, 0)) }
+    let morningInsights = MoodInsights.build(
+        MoodStats.build(entries: morning, now: now, window: .month, calendar: moodCalendar))
+    check("ожидание вечера с утра — повод для внимания",
+          morningInsights.contains { $0.level == .attention && $0.text.contains("ждёте с утра") })
+
+    var evening: [MoodEntry] = []
+    for day in [3, 4, 5, 6, 10] { evening.append(moodEntry(.homeSoon, 2026, 8, day, 18, 0)) }
+    let eveningInsights = MoodInsights.build(
+        MoodStats.build(entries: evening, now: now, window: .month, calendar: moodCalendar))
+    check("ожидание вечера к вечеру — не беда",
+          eveningInsights.contains { $0.text.contains("обычный конец рабочего дня") })
+    // Тревога на этих данных всё равно будет — месяц одних жалоб тяжёлый сам
+    // по себе. Проверяем ровно то, что проверяем: вывода про утро тут нет.
+    check("вечернее ожидание не даёт вывода про утро",
+          !eveningInsights.contains { $0.text.contains("ждёте с утра") })
 
     // Хороший фон не должен превращаться в тревогу.
     var fine: [MoodEntry] = []

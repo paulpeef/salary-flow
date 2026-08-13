@@ -25,6 +25,9 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
     case bored
     /// Нервно, на пределе, тревожно.
     case nervous
+    /// Считает часы до конца дня: работа не невыносима, но хочется, чтобы
+    /// она уже кончилась.
+    case homeSoon
     /// «Не хочу здесь работать» — отметка про отношение к работе целиком.
     case quit
 
@@ -43,6 +46,7 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
         case .hard: return "Тяжело"
         case .bored: return "Скучно"
         case .nervous: return "Нервно"
+        case .homeSoon: return "Скорее бы домой"
         case .quit: return "Хочу уйти"
         }
     }
@@ -56,6 +60,7 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
         case .hard: return "тяжело работается"
         case .bored: return "скучно"
         case .nervous: return "нервно"
+        case .homeSoon: return "скорее бы домой"
         case .quit: return "не хочу здесь работать"
         }
     }
@@ -70,6 +75,7 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
         case .hard: return "😓"
         case .bored: return "🥱"
         case .nervous: return "😬"
+        case .homeSoon: return "🏠"
         case .quit: return "🚪"
         }
     }
@@ -83,6 +89,7 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
         case .hard: return "Тяжело работается — не в смысле «нет сил», а именно тяжело"
         case .bored: return "Скучно: делать нечего или дело не занимает"
         case .nervous: return "Нервно, на пределе"
+        case .homeSoon: return "Считаю часы до конца дня"
         case .quit: return "Не хочу здесь работать"
         }
     }
@@ -99,6 +106,11 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
         case .good: return 1
         case .tired: return -1
         case .bored: return -1
+        // Ждать вечера — обычное человеческое состояние, а не беда: вес такой
+        // же, как у скуки и усталости. Тяжесть тут не в самом чувстве, а в том,
+        // когда оно приходит, — за это отвечает отдельный вывод про первую
+        // половину дня.
+        case .homeSoon: return -1
         case .hard: return -1.5
         case .nervous: return -1.5
         case .quit: return -2
@@ -116,7 +128,8 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
     var axis: MoodAxis {
         switch self {
         case .good: return .mood
-        case .flow, .bored: return .interest
+        // «Скорее бы домой» — про то же, что и скука: работа не занимает.
+        case .flow, .bored, .homeSoon: return .interest
         case .tired: return .energy
         case .hard: return .load
         case .nervous: return .nerves
