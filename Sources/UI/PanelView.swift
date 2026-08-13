@@ -14,11 +14,17 @@ struct PanelView: View {
 
         VStack(alignment: .leading, spacing: 14) {
             statusRow(s)
-            monthBlock(s)
-            Divider()
+            // «Сегодня» выше месяца по просьбе владельца: в первую очередь
+            // смотрят на текущий день, а итог месяца — уже следующий вопрос.
             todayBlock(s)
             Divider()
+            monthBlock(s)
+            Divider()
             statsBlock(s)
+            if model.settings.moodEnabled {
+                Divider()
+                MoodBlock(model: model, log: model.mood)
+            }
             Divider()
             buttons
         }

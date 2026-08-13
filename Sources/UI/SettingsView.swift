@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
-    case money, schedule, specialDays, appearance, privacy
+    case money, schedule, specialDays, mood, appearance, privacy
 
     var id: Int { rawValue }
 
@@ -11,6 +11,7 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
         case .money: return "Деньги"
         case .schedule: return "График"
         case .specialDays: return "Особые дни"
+        case .mood: return "Настроение"
         case .appearance: return "Вид"
         case .privacy: return "Приватность"
         }
@@ -21,6 +22,7 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
         case .money: return "banknote"
         case .schedule: return "calendar"
         case .specialDays: return "beach.umbrella"
+        case .mood: return "face.smiling"
         case .appearance: return "slider.horizontal.3"
         case .privacy: return "eye.slash"
         }
@@ -36,16 +38,16 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
 /// окна, а значит попадает в оффскрин-рендер и его видно на превью.
 struct SettingsView: View {
     @ObservedObject var model: AppModel
-    @State private var section: SettingsSection
 
-    init(model: AppModel, initialSection: SettingsSection = .money) {
-        self.model = model
-        _section = State(initialValue: initialSection)
-    }
+    /// Выбранный раздел живёт в модели, а не в `@State` окна: снаружи по нему
+    /// прицеливаются («Посмотреть статистику» в панели открывает окно сразу
+    /// на «Настроении»), и второго источника истины тут быть не должно —
+    /// иначе окно, уже открытое на другом разделе, прыжок пропустит.
+    private var section: SettingsSection { model.settingsSection }
 
     var body: some View {
         HStack(spacing: 0) {
-            List(selection: $section) {
+            List(selection: $model.settingsSection) {
                 ForEach(SettingsSection.allCases) { item in
                     Label(item.title, systemImage: item.symbol)
                         .padding(.vertical, 2)
@@ -76,6 +78,7 @@ struct SettingsView: View {
         case .money: MoneyTab(model: model)
         case .schedule: ScheduleTab(model: model)
         case .specialDays: SpecialDaysTab(model: model)
+        case .mood: MoodStatsView(model: model, log: model.mood)
         case .appearance: AppearanceTab(model: model)
         case .privacy: PrivacyTab(model: model)
         }

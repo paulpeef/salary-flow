@@ -15,11 +15,13 @@ swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.b
   Sources/Model/Engine.swift \
   Sources/Model/Holidays.swift Sources/Model/WorkCalendar.swift \
   Sources/Model/Formatting.swift \
+  Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/AppModel.swift \
   Sources/UI/PanelView.swift \
   Sources/UI/SettingsView.swift \
   Sources/UI/MenuBarLabel.swift \
   Sources/UI/CalendarGrid.swift \
+  Sources/UI/MoodBlock.swift Sources/UI/MoodStatsView.swift \
   Sources/Support/AppDelegate.swift \
   Sources/Support/LaunchAgent.swift \
   Sources/Support/Migration.swift \
@@ -29,4 +31,6 @@ swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.b
   Tools/RenderPreview/main.swift \
   -o .build/RenderPreview
 
-SALARYFLOW_LOG_DIR="$(mktemp -d)/logs" SALARYFLOW_SETTINGS="$(mktemp -d)/preview-settings.json" .build/RenderPreview "$OUT"
+SALARYFLOW_LOG_DIR="$(mktemp -d)/logs" SALARYFLOW_SETTINGS="$(mktemp -d)/preview-settings.json" \
+SALARYFLOW_MOOD="$(mktemp -d)/preview-mood.json" \
+.build/RenderPreview "$OUT"

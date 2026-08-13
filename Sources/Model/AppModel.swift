@@ -41,6 +41,16 @@ final class AppModel: ObservableObject {
     /// Производственный календарь выбранной страны.
     let holidays: HolidayStore
 
+    /// Журнал отметок настроения. Живёт столько же, сколько приложение:
+    /// его читают и панель, и раздел статистики.
+    let mood = MoodLog()
+
+    /// Раздел, открытый в окне настроек. Держится здесь, а не в самом окне,
+    /// потому что открывают его снаружи: кнопка «Посмотреть статистику»
+    /// в панели должна попасть сразу в нужный раздел, в том числе когда окно
+    /// уже открыто на другом.
+    @Published var settingsSection: SettingsSection = .money
+
     /// Итоговая причина, по которой цифры спрятаны.
     var privacyReason: PrivacyReason? {
         if settings.hideAmount { return .manual }
@@ -107,11 +117,64 @@ final class AppModel: ObservableObject {
 
     private var holidayUpdates: AnyCancellable?
 
+    // MARK: Отметки настроения
+
+    /// Отметки текущего захода: их панель подсвечивает как выбранные.
+    func currentMoodMarks() -> [MoodKind] {
+        mood.currentCheckIn(now: frozenNow ?? Date()).map(\.kind)
+    }
+
+    /// Момент последней отметки — панель показывает его как «отмечено в 14:32».
+    func lastMoodMark() -> Date? {
+        mood.currentCheckIn(now: frozenNow ?? Date()).map(\.at).max()
+    }
+
+    /// Нажатие на плашку в панели.
+    ///
+    /// Пока не вышло окно захода, нажатие правит уже сделанную отметку, а не
+    /// заводит новую: иначе каждое «ой, не то» оставалось бы в истории навсегда
+    /// и портило статистику. Хорошее и плохое вместе не живут — выбор одного
+    /// снимает другое, чтобы индекс не складывался из взаимных опровержений.
+    func toggleMood(_ kind: MoodKind) {
+        let now = frozenNow ?? Date()
+        let checkIn = mood.currentCheckIn(now: now)
+
+        if let existing = checkIn.first(where: { $0.kind == kind }) {
+            mood.remove(id: existing.id)
+            return
+        }
+        for entry in checkIn where entry.kind.isPositive != kind.isPositive {
+            mood.remove(id: entry.id)
+        }
+
+        let calendar = settings.calendar
+        let parts = calendar.dateComponents([.hour, .minute, .weekday], from: now)
+        // Что именно отметили, в журнал не пишем: журнал дублируется в системный
+        // лог и попадает в отчёты диагностики, а это самое личное, что здесь есть.
+        Log.info("отметка настроения записана")
+        mood.append(MoodEntry(
+            at: now,
+            kind: kind,
+            day: DayStamp(now, in: calendar),
+            minuteOfDay: (parts.hour ?? 0) * 60 + (parts.minute ?? 0),
+            weekday: parts.weekday ?? 1,
+            phase: MoodPhase(snapshot.state),
+            shiftFraction: snapshot.state == .working ? snapshot.dayProgress : nil
+        ))
+    }
+
     /// Как выглядит конкретный день по текущим настройкам и календарю.
     /// Календарю нужен тот же расчёт, что и счётчику, — чтобы сетка
     /// не разошлась с деньгами.
     func engineSnapshotState(for day: DayStamp) -> DayState {
         engine.state(of: day, now: frozenNow ?? Date())
+    }
+
+    /// Должен ли человек был работать в этот день. Статистике настроения нужно
+    /// именно это: отпуск и праздник в знаменатель «в каких днях есть отметки»
+    /// не идут — в них никто ничего отмечать и не обязан.
+    func isExpectedWorkday(_ day: DayStamp) -> Bool {
+        engine.state(of: day, now: day.startOfDay(in: settings.calendar)).isWorkday
     }
 
     /// Остановить время на заданном моменте — используется рендером превью.

@@ -655,6 +655,212 @@ do {
           fresh.timeZoneID == TimeZone.current.identifier)
 }
 
+// MARK: - Настроение: веса и заходы
+
+var moodCalendar: Calendar {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = moscow
+    return c
+}
+
+func moodEntry(_ kind: MoodKind, _ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> MoodEntry {
+    let at = moment(y, m, d, h, min)
+    let weekday = moodCalendar.component(.weekday, from: at)
+    let minuteOfDay = h * 60 + min
+    return MoodEntry(at: at, kind: kind, day: DayStamp(at, in: moodCalendar),
+                     minuteOfDay: minuteOfDay, weekday: weekday, phase: .working,
+                     shiftFraction: min0to1(Double(minuteOfDay - 600) / 540))
+}
+
+func min0to1(_ v: Double) -> Double { Swift.max(0, Swift.min(1, v)) }
+
+do {
+    check("индекс «всё хорошо» = 75", nearly(MoodKind.good.index, 75))
+    check("индекс «в потоке» = 100", nearly(MoodKind.flow.index, 100))
+    check("индекс «не хочу здесь работать» = 0", nearly(MoodKind.quit.index, 0))
+    check("индекс «устал» = 25", nearly(MoodKind.tired.index, 25))
+    check("положительных состояний ровно два",
+          MoodKind.allCases.filter(\.isPositive).count == 2)
+    check("первым в списке идёт «всё хорошо»", MoodKind.allCases.first == .good,
+          "получено \(MoodKind.allCases.first?.rawValue ?? "—")")
+
+    // Отметки подряд — один заход: два клика не должны весить больше одного.
+    let together = [moodEntry(.tired, 2026, 8, 12, 15, 0),
+                    moodEntry(.bored, 2026, 8, 12, 15, 10)]
+    let one = MoodStats.groupIntoCheckIns(together)
+    check("две отметки в пределах окна — один заход", one.count == 1, "получено \(one.count)")
+    check("индекс захода — среднее по отметкам", nearly(one[0].index, 25))
+
+    let apart = [moodEntry(.tired, 2026, 8, 12, 15, 0),
+                 moodEntry(.bored, 2026, 8, 12, 16, 0)]
+    check("отметки через час — два захода", MoodStats.groupIntoCheckIns(apart).count == 2)
+
+    // Заход не должен склеиваться через полночь: это разные дни, даже если
+    // ночная смена идёт непрерывно.
+    let overnight = [moodEntry(.tired, 2026, 8, 12, 23, 50),
+                     moodEntry(.bored, 2026, 8, 13, 0, 5)]
+    check("через полночь — разные заходы", MoodStats.groupIntoCheckIns(overnight).count == 2)
+}
+
+// MARK: - Настроение: окна и разрезы
+
+do {
+    let now = moment(2026, 8, 12, 18, 0)
+    let entries = [
+        moodEntry(.good, 2026, 6, 1, 12, 0),        // 72 дня назад — вне обоих окон
+        moodEntry(.flow, 2026, 7, 1, 12, 0),        // 42 дня назад — предыдущее окно месяца
+        moodEntry(.quit, 2026, 7, 20, 16, 0),       // 23 дня назад
+        moodEntry(.tired, 2026, 8, 10, 17, 0),      // 2 дня назад
+        moodEntry(.good, 2026, 8, 12, 11, 0)
+    ]
+
+    let week = MoodStats.build(entries: entries, now: now, window: .week, calendar: moodCalendar)
+    check("в окно недели попали две отметки", week.marks == 2, "получено \(week.marks)")
+    check("индекс недели — среднее 25 и 75", nearly(week.index ?? 0, 50))
+
+    let month = MoodStats.build(entries: entries, now: now, window: .month, calendar: moodCalendar)
+    check("в окно месяца попали три отметки", month.marks == 3, "получено \(month.marks)")
+    check("предыдущее окно считается отдельно и берёт только своё",
+          month.previousMarks == 1, "получено \(month.previousMarks)")
+    check("индекс предыдущего окна считается по его отметкам",
+          nearly(month.previousIndex ?? 0, 100), "получено \(month.previousIndex ?? -1)")
+
+    let all = MoodStats.build(entries: entries, now: now, window: .all, calendar: moodCalendar)
+    check("«всё время» берёт все отметки", all.marks == 5)
+    check("дней с отметками — пять", all.daysWithMarks == 5)
+    check("самое частое состояние — «всё хорошо»", all.distribution.first?.kind == .good)
+    check("доля «всё хорошо» = 2 из 5", nearly(all.share(.good), 0.4))
+}
+
+do {
+    // Разрез по дням недели на чистых данных: 10 августа 2026 — понедельник,
+    // 11-е — вторник. Дни недели берутся из самой отметки, а не из настроек.
+    let entries = [moodEntry(.tired, 2026, 8, 10, 17, 0), moodEntry(.good, 2026, 8, 11, 12, 0)]
+    let stats = MoodStats.build(entries: entries, now: moment(2026, 8, 12, 18, 0),
+                               window: .month, calendar: moodCalendar)
+    let monday = stats.byWeekday.first { $0.label == "Пн" }
+    let tuesday = stats.byWeekday.first { $0.label == "Вт" }
+    check("понедельник виден в разрезе по дням недели", monday?.count == 1,
+          "получено \(monday?.count ?? -1)")
+    check("индекс понедельника — «устал»", nearly(monday?.index ?? 0, 25))
+    check("индекс вторника — «всё хорошо»", nearly(tuesday?.index ?? 0, 75))
+    check("день без отметок остаётся без индекса",
+          stats.byWeekday.first { $0.label == "Сб" }?.index == nil)
+    check("порядок дней недели начинается с понедельника",
+          stats.byWeekday.map(\.label) == ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"])
+}
+
+do {
+    // Усталость к вечеру: три отметки во второй половине смены из четырёх.
+    let entries = [
+        moodEntry(.tired, 2026, 8, 3, 17, 0),
+        moodEntry(.tired, 2026, 8, 4, 18, 0),
+        moodEntry(.tired, 2026, 8, 5, 16, 30),
+        moodEntry(.tired, 2026, 8, 6, 10, 30)
+    ]
+    let stats = MoodStats.build(entries: entries, now: moment(2026, 8, 12, 18, 0),
+                               window: .month, calendar: moodCalendar)
+    let late = stats.lateShiftShare(.tired)
+    check("усталость считается по доле смены", late.total == 4 && late.late == 3,
+          "получено \(late.late) из \(late.total)")
+
+    // Рабочие дни в окне приходят снаружи: статистика не должна сама решать,
+    // какой день рабочий.
+    let withWorkdays = MoodStats.build(entries: entries, now: moment(2026, 8, 12, 18, 0),
+                                       window: .week, calendar: moodCalendar,
+                                       isWorkday: { $0.day % 2 == 0 })
+    check("рабочие дни окна считаются по переданному правилу",
+          (withWorkdays.workdaysInWindow ?? 0) > 0)
+}
+
+// MARK: - Настроение: выводы
+
+do {
+    let now = moment(2026, 8, 12, 18, 0)
+
+    // Пусто — и вывод об этом, а не выдуманная тенденция.
+    let empty = MoodStats.build(entries: [], now: now, window: .month, calendar: moodCalendar)
+    let emptyInsights = MoodInsights.build(empty)
+    check("на пустых данных один вывод", emptyInsights.count == 1)
+    check("пустые данные не дают уверенных выводов",
+          emptyInsights[0].text.contains("Отметок за этот период нет"))
+
+    // Три отметки — это ещё не закономерность, и приложение так и говорит.
+    let thin = MoodStats.build(entries: [moodEntry(.tired, 2026, 8, 10, 17, 0),
+                                        moodEntry(.tired, 2026, 8, 11, 17, 0)],
+                               now: now, window: .month, calendar: moodCalendar)
+    check("двух отметок мало для выводов", thin.isConclusive == false)
+    check("о нехватке данных сказано прямо",
+          MoodInsights.build(thin).contains { $0.text.contains("мало данных") })
+
+    // Шесть «не хочу здесь работать» за месяц — это уже тревога, а не настроение.
+    var quitting: [MoodEntry] = []
+    for day in [3, 4, 5, 6, 7, 10] { quitting.append(moodEntry(.quit, 2026, 8, day, 17, 0)) }
+    let quitStats = MoodStats.build(entries: quitting, now: now, window: .month, calendar: moodCalendar)
+    let quitInsights = MoodInsights.build(quitStats)
+    check("серия «хочу уйти» поднимает тревогу",
+          quitInsights.contains { $0.level == .alarm && $0.text.contains("Не хочу здесь работать") })
+    check("тяжёлый фон назван тяжёлым",
+          quitInsights.contains { $0.text.contains("Настроение тяжёлое") })
+    check("серия тяжёлых дней найдена", quitStats.worstStreak >= 3,
+          "получено \(quitStats.worstStreak)")
+
+    // Хороший фон не должен превращаться в тревогу.
+    var fine: [MoodEntry] = []
+    for day in [3, 4, 5, 6, 7, 10] { fine.append(moodEntry(.good, 2026, 8, day, 12, 0)) }
+    let fineStats = MoodStats.build(entries: fine, now: now, window: .month, calendar: moodCalendar)
+    let fineInsights = MoodInsights.build(fineStats)
+    check("на хорошем фоне тревог нет", fineInsights.allSatisfy { $0.level != .alarm })
+    check("хороший фон назван хорошим",
+          fineInsights.contains { $0.text.contains("в целом хорошее") })
+    check("серии тяжёлых дней нет", fineStats.worstStreak == 0)
+}
+
+// MARK: - Настроение: файл
+
+do {
+    let entries = [moodEntry(.tired, 2026, 8, 10, 17, 0), moodEntry(.good, 2026, 8, 11, 12, 0)]
+    let data = try! MoodLog.encode(entries)
+    let back = MoodLog.decode(data)
+    check("журнал настроения переживает запись и чтение", back.entries.count == 2)
+    check("состояния не путаются при чтении",
+          back.entries.map(\.kind) == [.tired, .good])
+    check("доля смены сохраняется", back.entries[0].shiftFraction != nil)
+
+    // Одна испорченная запись не должна уносить остальные: файл живёт годами.
+    let mixed = """
+    {"version":1,"entries":[
+      {"at":"2026-08-10T14:00:00Z","kind":"tired","day":{"year":2026,"month":8,"day":10},
+       "minuteOfDay":1020,"weekday":2,"phase":"working"},
+      {"at":"не дата","kind":"tired"},
+      {"at":"2026-08-11T09:00:00Z","kind":"такого состояния нет"},
+      {"at":"2026-08-11T09:00:00Z","kind":"good"}
+    ]}
+    """
+    let salvaged = MoodLog.decode(Data(mixed.utf8))
+    check("испорченные записи пропускаются по одной", salvaged.entries.count == 2,
+          "получено \(salvaged.entries.count)")
+    check("пропущенные записи посчитаны", salvaged.skipped == 2, "получено \(salvaged.skipped)")
+    check("запись без части полей восстанавливается из момента",
+          salvaged.entries.last?.phase == .unknown)
+
+    check("мусор вместо файла не роняет разбор", MoodLog.decode(Data("{[nonsense".utf8)).entries.isEmpty)
+}
+
+// MARK: - Настроение: настройки
+
+do {
+    check("опрос включён по умолчанию", AppSettings().moodEnabled)
+
+    // Файл от версии без опроса не должен выключать его молча.
+    let old = """
+    {"schemaVersion":2,"monthlyAmount":100000,"currencyCode":"RUB"}
+    """
+    let decoded = try! JSONDecoder().decode(AppSettings.self, from: Data(old.utf8))
+    check("старый файл настроек оставляет опрос включённым", decoded.moodEnabled)
+    check("старый файл настроек не теряет оклад", nearly(decoded.monthlyAmount, 100_000))
+}
+
 // MARK: - Итог
 
 if failures.isEmpty {

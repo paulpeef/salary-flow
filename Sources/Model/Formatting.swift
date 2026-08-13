@@ -76,10 +76,42 @@ enum Fmt {
 
     /// «14 дней», «21 день», «2 дня».
     static func days(_ n: Int) -> String {
+        plural(n, "день", "дня", "дней")
+    }
+
+    /// «30 днями», «1 днём» — для оборота «в сравнении с предыдущими…».
+    static func daysInstrumental(_ n: Int) -> String {
         let mod10 = n % 10, mod100 = n % 100
-        if mod10 == 1 && mod100 != 11 { return "\(n) день" }
-        if (2...4).contains(mod10) && !(12...14).contains(mod100) { return "\(n) дня" }
-        return "\(n) дней"
+        if mod10 == 1 && mod100 != 11 { return "\(n) днём" }
+        return "\(n) днями"
+    }
+
+    /// «1 отметка», «2 отметки», «7 отметок».
+    static func marks(_ n: Int) -> String {
+        plural(n, "отметка", "отметки", "отметок")
+    }
+
+    /// «1 раз», «2 раза», «7 раз».
+    static func times(_ n: Int) -> String {
+        plural(n, "раз", "раза", "раз")
+    }
+
+    static func plural(_ n: Int, _ one: String, _ few: String, _ many: String) -> String {
+        let mod10 = n % 10, mod100 = n % 100
+        if mod10 == 1 && mod100 != 11 { return "\(n) \(one)" }
+        if (2...4).contains(mod10) && !(12...14).contains(mod100) { return "\(n) \(few)" }
+        return "\(n) \(many)"
+    }
+
+    /// Индекс настроения — целым числом: доли балла тут ничего не значат.
+    static func index(_ value: Double) -> String {
+        "\(Int(value.rounded()))"
+    }
+
+    /// «11.08» — подпись точки на графике по неделям.
+    static func dayMonth(_ date: Date, calendar: Calendar) -> String {
+        let c = calendar.dateComponents([.day, .month], from: date)
+        return String(format: "%02d.%02d", c.day ?? 1, c.month ?? 1)
     }
 }
 

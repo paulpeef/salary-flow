@@ -257,6 +257,11 @@ struct AppSettings: Codable, Equatable {
     var showIcon: Bool = true
     var launchAtLogin: Bool = false
 
+    /// Спрашивать в панели, как человек себя чувствует.
+    /// Выключается там же, где смотрится статистика: опрос — не обязательная
+    /// часть счётчика, и панель без него просто короче.
+    var moodEnabled: Bool = true
+
     // Приватность
     var privacyOnCamera: Bool = true
     var privacyOnCapture: Bool = true
@@ -322,6 +327,7 @@ struct AppSettings: Codable, Equatable {
         hideAmount = c.value(.hideAmount, or: d.hideAmount)
         showIcon = c.value(.showIcon, or: d.showIcon)
         launchAtLogin = c.value(.launchAtLogin, or: d.launchAtLogin)
+        moodEnabled = c.value(.moodEnabled, or: d.moodEnabled)
 
         privacyOnCamera = c.value(.privacyOnCamera, or: d.privacyOnCamera)
         privacyOnCapture = c.value(.privacyOnCapture, or: d.privacyOnCapture)
