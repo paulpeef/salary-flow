@@ -45,6 +45,17 @@ final class PrivacyMonitor: ObservableObject {
 
     private var timer: Timer?
 
+    /// Когда в последний раз видели признак захвата.
+    private var lastTriggerSeen: Date?
+
+    /// Сколько держать приватный режим после того, как признак пропал.
+    ///
+    /// Скриншот — событие мгновенное: к моменту, когда опрос заметит
+    /// `screencapture`, снимок уже сделан. Зато следующий снимок в той же серии
+    /// защищён, если не снимать режим сразу. Заодно исчезает мигание, когда
+    /// цифры прятались и тут же возвращались.
+    private static let cooldown: TimeInterval = 8
+
     /// Процессы, которые уже работали в момент запуска приложения.
     /// Демонстрация экрана всегда начинается ПОСЛЕ — а фоновый агент удалёнки
     /// висит с самой загрузки системы, и без этой отсечки счётчик прятался бы
@@ -74,10 +85,17 @@ final class PrivacyMonitor: ObservableObject {
             if let process = ProcessList.firstMatch(settings.captureProcessNames,
                                                     in: running,
                                                     ignoring: processesRunningAtStartup) {
+                lastTriggerSeen = Date()
                 reason = .capture(process)
                 return
             }
         }
+
+        // Признак пропал — держим режим ещё немного.
+        if let seen = lastTriggerSeen, Date().timeIntervalSince(seen) < PrivacyMonitor.cooldown {
+            return
+        }
+        lastTriggerSeen = nil
         reason = nil
     }
 }
