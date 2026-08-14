@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// То, что видно в строке меню: капля и сумма.
-/// Вне рабочего дня превращается в заглушку — по настройке либо просто значок,
-/// либо итог дня, либо итог месяца.
+/// То, что видно в строке меню: капля и сумма — за сегодня или за месяц,
+/// смотря что выбрано в настройках. Вне рабочего дня сумма по умолчанию
+/// убирается и остаётся одна капля.
 struct MenuBarLabel: View {
     @ObservedObject var model: AppModel
 
@@ -34,22 +34,29 @@ struct MenuBarLabel: View {
     /// Самая длинная строка, которую значок покажет сегодня: по ней и меряем.
     private func widestText(snapshot s: Snapshot) -> String {
         let money = MoneyFormatter(settings: model.settings)
-        switch model.settings.idleDisplay {
-        case .monthTotal: return money.string(max(s.monthEarned, s.monthProjected))
-        default: return money.string(max(s.todayEarned, s.todayFull))
+        switch model.settings.menuBarTotal {
+        case .month: return money.string(max(s.monthEarned, s.monthProjected))
+        case .day: return money.string(max(s.todayEarned, s.todayFull))
         }
     }
 
     private func labelText(snapshot s: Snapshot) -> String? {
         // В приватном режиме цифр нет вообще: «•••» на видеозвонке само по себе
         // привлекает внимание, а пустая капля выглядит как любой другой значок.
-        if model.amountsHidden { return model.settings.showIcon ? nil : "—" }
+        if model.amountsHidden { return placeholder }
+        // Вне рабочего дня сумма замирает, поэтому по умолчанию убирается.
+        guard s.state == .working || model.settings.idleShowsAmount else { return placeholder }
+
         let money = MoneyFormatter(settings: model.settings)
-        if s.state == .working { return money.string(s.todayEarned) }
-        switch model.settings.idleDisplay {
-        case .icon: return model.settings.showIcon ? nil : "—"
-        case .dayTotal: return money.string(s.todayEarned)
-        case .monthTotal: return money.string(s.monthEarned)
+        switch model.settings.menuBarTotal {
+        case .day: return money.string(s.todayEarned)
+        case .month: return money.string(s.monthEarned)
         }
+    }
+
+    /// Когда цифры нет, а значок выключен, пункт меню-бара стал бы пустым
+    /// и по нему нечем было бы попасть — оставляем прочерк.
+    private var placeholder: String? {
+        model.settings.showIcon ? nil : "—"
     }
 }

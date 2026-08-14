@@ -10,6 +10,9 @@ import SwiftUI
 struct MoodStatsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var log: MoodLog
+    /// Наблюдается отдельно: разрешение на уведомления приходит от системы
+    /// асинхронно, и без подписки строка о нём осталась бы устаревшей.
+    @ObservedObject var reminders: MoodReminder
 
     @State private var window: MoodWindow = .month
     @State private var confirmWipe = false
@@ -26,6 +29,10 @@ struct MoodStatsView: View {
 
     var body: some View {
         Form {
+            // Тумблеры наверху, а не под двумя тысячами точек графиков:
+            // в раздел настроек идут за органами управления, и искать их
+            // в подвале отчёта неоткуда.
+            surveySection
             if model.amountsHidden {
                 masked
             } else {
@@ -53,7 +60,7 @@ struct MoodStatsView: View {
 
     // MARK: Приватный режим
 
-    /// Здесь лежит самое личное, что приложение знает: «не хочу здесь работать»
+    /// Здесь лежит самое личное, что приложение знает: «хочу уволиться»
     /// на демонстрации экрана стоит дороже, чем открытая сумма оклада.
     private var masked: some View {
         Section {
@@ -98,7 +105,7 @@ struct MoodStatsView: View {
         } header: {
             Text("Как дела в целом")
         } footer: {
-            Text("Индекс — среднее по отметкам от 0 до 100: 50 — ровно посередине, «всё хорошо» даёт 75, «устал» — 25, «не хочу здесь работать» — 0. Отмечать можно сразу несколько состояний, и смесь вроде «в потоке, но устал» даёт середину. Отметки в пределах получаса считаются одним заходом: повтор «устал» через двадцать минут не делает день вдвое тяжелее, но в число отметок ниже он попадает — как часто вы об этом вспоминаете, тоже данные.")
+            Text("Индекс — среднее по отметкам от 0 до 100: 50 — ровно посередине, «всё хорошо» даёт 75, «устал» — 25, «хочу уволиться» — 0. Отмечать можно сразу несколько состояний, и смесь вроде «в потоке, но устал» даёт середину. Отметки в пределах получаса считаются одним заходом: повтор «устал» через двадцать минут не делает день вдвое тяжелее, но в число отметок ниже он попадает — как часто вы об этом вспоминаете, тоже данные.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -379,12 +386,64 @@ struct MoodStatsView: View {
         }
     }
 
+    // MARK: Опрос и напоминания
+
+    private var surveySection: some View {
+        Section {
+            Toggle("Спрашивать в панели", isOn: $model.settings.moodEnabled)
+            Toggle("Напоминать отметить настроение", isOn: $model.settings.moodRemindersEnabled)
+                .disabled(!model.settings.moodEnabled)
+            if model.remindersWanted { reminderStatus }
+        } header: {
+            Text("Опрос")
+        } footer: {
+            Text("Три напоминания за смену: время считается по рабочему дню и едет само, когда меняется график. В выходные, праздники и отпуск напоминаний нет; если вы только что отметились, ближайшее пропускается. Отвечать можно прямо из уведомления или нажать на него — раскроется панель.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Когда именно придут напоминания. Показывается всегда, а не прячется
+    /// в подсказку: «три раза в день» без времени — чёрный ящик, и первое
+    /// уведомление станет неожиданностью.
+    @ViewBuilder
+    private var reminderStatus: some View {
+        switch reminders.access {
+        case .denied:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Система не разрешила уведомления — напоминания не придут.",
+                      systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+                Button("Открыть настройки уведомлений") { reminders.openSystemSettings() }
+            }
+        case .unavailable:
+            Text("В этой сборке уведомления недоступны")
+                .foregroundStyle(.secondary)
+        case .notAsked, .granted:
+            LabeledContent("Напомню") {
+                Text(reminderSchedule)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.trailing)
+            }
+        }
+    }
+
+    private var reminderSchedule: String {
+        let zone = model.settings.timeZone
+        let today = model.remindersLeftToday()
+        if !today.isEmpty {
+            return "сегодня в " + Fmt.list(today.map { Fmt.clock($0, timeZone: zone) })
+        }
+        guard let next = model.nextReminder else {
+            return "в ближайшие дни рабочих смен нет"
+        }
+        return "\(Fmt.shortDate(next)) в \(Fmt.clock(next, timeZone: zone))"
+    }
+
     // MARK: Данные
 
     private var dataSection: some View {
         Section {
-            Toggle("Спрашивать в панели", isOn: $model.settings.moodEnabled)
-
             LabeledContent("История") {
                 HStack {
                     Text(Fmt.marks(log.entries.count))

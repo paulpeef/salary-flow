@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
-    case money, schedule, specialDays, mood, appearance, privacy
+    case money, schedule, specialDays, counter, privacy, mood, app
 
     var id: Int { rawValue }
 
@@ -11,9 +11,10 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
         case .money: return "Деньги"
         case .schedule: return "График"
         case .specialDays: return "Особые дни"
-        case .mood: return "Настроение"
-        case .appearance: return "Вид"
+        case .counter: return "Счётчик"
         case .privacy: return "Приватность"
+        case .mood: return "Настроение"
+        case .app: return "Приложение"
         }
     }
 
@@ -22,9 +23,40 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
         case .money: return "banknote"
         case .schedule: return "calendar"
         case .specialDays: return "beach.umbrella"
-        case .mood: return "face.smiling"
-        case .appearance: return "slider.horizontal.3"
+        case .counter: return "menubar.rectangle"
         case .privacy: return "eye.slash"
+        case .mood: return "face.smiling"
+        case .app: return "gearshape"
+        }
+    }
+}
+
+/// Разделы, собранные в группы.
+///
+/// Семь строк подряд читаются как свалка — ровно то, на что жаловался владелец
+/// («много всего напихано, непонятно, что где лежит»). Группы разводят то, что
+/// настраивают один раз при установке, и то, что трогают время от времени,
+/// так что боковой список сам становится картой.
+enum SettingsGroup: Int, CaseIterable, Identifiable {
+    case calculation, display, diary, program
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .calculation: return "Расчёт"
+        case .display: return "Показ"
+        case .diary: return "Дневник"
+        case .program: return "Программа"
+        }
+    }
+
+    var sections: [SettingsSection] {
+        switch self {
+        case .calculation: return [.money, .schedule, .specialDays]
+        case .display: return [.counter, .privacy]
+        case .diary: return [.mood]
+        case .program: return [.app]
         }
     }
 }
@@ -48,10 +80,14 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             List(selection: $model.settingsSection) {
-                ForEach(SettingsSection.allCases) { item in
-                    Label(item.title, systemImage: item.symbol)
-                        .padding(.vertical, 2)
-                        .tag(item)
+                ForEach(SettingsGroup.allCases) { group in
+                    Section(group.title) {
+                        ForEach(group.sections) { item in
+                            Label(item.title, systemImage: item.symbol)
+                                .padding(.vertical, 2)
+                                .tag(item)
+                        }
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -78,9 +114,10 @@ struct SettingsView: View {
         case .money: MoneyTab(model: model)
         case .schedule: ScheduleTab(model: model)
         case .specialDays: SpecialDaysTab(model: model)
-        case .mood: MoodStatsView(model: model, log: model.mood)
-        case .appearance: AppearanceTab(model: model)
+        case .counter: CounterTab(model: model)
         case .privacy: PrivacyTab(model: model)
+        case .mood: MoodStatsView(model: model, log: model.mood, reminders: model.reminders)
+        case .app: AppTab(model: model)
         }
     }
 }
@@ -123,10 +160,9 @@ private struct MoneyTab: View {
 
                 TextField("Свой символ", text: $model.settings.customCurrencySymbol,
                           prompt: Text("необязательно, например ₽"))
-
-                Picker("Производственный календарь", selection: $model.settings.country) {
-                    ForEach(Country.allCases) { Text($0.title).tag($0) }
-                }
+                // Выбор страны переехал в «Особые дни»: он управляет сеткой
+                // производственного календаря, а она живёт именно там — держать
+                // настройку и её результат в разных разделах значит прятать связь.
             } header: {
                 Text("Сколько платят")
             } footer: {
@@ -156,10 +192,12 @@ private struct MoneyTab: View {
             Section("Что получается") {
                 let s = model.snapshot
                 let money = MoneyFormatter(settings: model.settings, decimals: 2)
+                LabeledContent("Норма рабочих дней месяца", value: Fmt.days(s.normDays))
                 LabeledContent("Дневная ставка", value: money.string(s.dailyRate))
                 LabeledContent("В час", value: money.string(s.perHour))
+                // «В секунду» отсюда убрано: четыре знака после запятой — цифра
+                // для развлечения, а скорость и так видно по «в минуту».
                 LabeledContent("В минуту", value: money.string(s.perSecond * 60))
-                LabeledContent("В секунду", value: MoneyFormatter(settings: model.settings, decimals: 4).string(s.perSecond))
             }
             .monospacedDigit()
         }
@@ -219,15 +257,6 @@ private struct ScheduleTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section {
-                TimeZonePicker(selection: $model.settings.timeZoneID)
-            } header: {
-                Text("Часовой пояс")
-            } footer: {
-                Text("Рабочий день считается по этому поясу, даже если ноутбук уехал в другой.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
             Section("Работа в компании") {
                 DatePicker("Первый рабочий день",
                            selection: dayBinding($model.settings.employmentStart),
@@ -238,6 +267,17 @@ private struct ScheduleTab: View {
                                selection: dayBinding($model.settings.employmentEnd),
                                displayedComponents: .date)
                 }
+            }
+
+            // Пояс задаётся один раз и потом не трогается — поэтому внизу,
+            // а не над датами, к которым возвращаются.
+            Section {
+                TimeZonePicker(selection: $model.settings.timeZoneID)
+            } header: {
+                Text("Часовой пояс")
+            } footer: {
+                Text("Рабочий день считается по этому поясу, даже если ноутбук уехал в другой. По нему же расставляются напоминания отметить настроение.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -318,8 +358,16 @@ private struct SpecialDaysTab: View {
     @ViewBuilder
     private var holidayCalendar: some View {
         HStack(spacing: 8) {
-            Text("Производственный календарь · \(model.settings.country.title)")
+            Text("Производственный календарь")
                 .font(.system(size: 12, weight: .semibold))
+            // Выбор страны стоит прямо над сеткой, которой он управляет:
+            // раньше он лежал в «Деньгах», и связь была видна только по
+            // совпадению слов в двух разных разделах.
+            Picker("", selection: $model.settings.country) {
+                ForEach(Country.allCases) { Text($0.title).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
             Spacer()
             if let refreshed = model.holidays.lastRefresh {
                 Text("обновлён \(Fmt.shortDate(refreshed))")
@@ -463,27 +511,54 @@ private struct RangeRow: View {
     }
 }
 
-// MARK: - Вид
+// MARK: - Счётчик
 
-private struct AppearanceTab: View {
+/// Всё, что видно на счётчике и в панели, — и больше ничего.
+///
+/// Раньше этот раздел назывался «Вид» и собрал в себе четыре несвязанные вещи:
+/// счётчик, автозапуск, обновления и пути к файлам. Общего у них было только
+/// «больше некуда» — автозапуск в разделе про внешний вид никто не искал.
+private struct CounterTab: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
         Form {
-            Section("В меню-баре") {
-                Toggle("Показывать значок капли", isOn: $model.settings.showIcon)
-                Picker("Копейки", selection: $model.settings.decimals) {
-                    Text("Не показывать").tag(0)
-                    Text("Показывать").tag(2)
+            Section {
+                Picker("Показывать", selection: $model.settings.menuBarTotal) {
+                    ForEach(MenuBarTotal.allCases) { Text($0.title).tag($0) }
                 }
-                .help("По умолчанию выключены: младшие разряды мельтешат и мешают читать сумму")
-                Picker("Вне рабочего дня показывать", selection: $model.settings.idleDisplay) {
-                    ForEach(IdleDisplay.allCases) { Text($0.title).tag($0) }
-                }
-            }
+                .pickerStyle(.radioGroup)
 
+                Toggle("Показывать сумму и вне рабочего дня", isOn: $model.settings.idleShowsAmount)
+                    .help("Вечером и в выходной сумма замирает — по умолчанию она убирается, остаётся одна капля")
+                Toggle("Показывать значок капли", isOn: $model.settings.showIcon)
+                Toggle("Показывать копейки", isOn: Binding(
+                    get: { model.settings.decimals > 0 },
+                    set: { model.settings.decimals = $0 ? 2 : 0 }
+                ))
+                .help("По умолчанию выключены: младшие разряды мельтешат и мешают читать сумму")
+            } header: {
+                Text("В меню-баре")
+            } footer: {
+                Text("Выбранное показывается на счётчике и первым, крупным блоком в раскрытой панели. Второй итог остаётся там же компактной строкой — искать его в настройках не придётся.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Приложение
+
+private struct AppTab: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Form {
             Section {
                 Toggle("Запускать при входе в систему", isOn: $model.settings.launchAtLogin)
+            } header: {
+                Text("Запуск")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Создаёт агент запуска в ~/Library/LaunchAgents и указывает его на текущее расположение программы.")
@@ -594,40 +669,47 @@ private struct PrivacyTab: View {
                 .foregroundStyle(.secondary)
             }
 
+            // Список процессов нужен единицам, а место занимал у всех: сносок
+            // в нём было больше, чем органов управления, и раздел читался как
+            // инструкция, а не как настройки. Тексты хорошие — не выброшены,
+            // а спрятаны на один клик.
             Section {
-                Text(AppSettings.defaultCaptureProcesses.joined(separator: ", "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                DisclosureGroup("Процессы, означающие захват экрана") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(AppSettings.defaultCaptureProcesses.joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
 
-                ForEach(Array(model.settings.privacyExtraProcesses.enumerated()), id: \.offset) { index, name in
-                    HStack {
-                        Text(name).monospaced()
-                        Spacer()
-                        Button(role: .destructive) {
-                            model.settings.privacyExtraProcesses.remove(at: index)
-                        } label: {
-                            Image(systemName: "trash")
+                        ForEach(Array(model.settings.privacyExtraProcesses.enumerated()), id: \.offset) { index, name in
+                            HStack {
+                                Text(name).monospaced()
+                                Spacer()
+                                Button(role: .destructive) {
+                                    model.settings.privacyExtraProcesses.remove(at: index)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                            }
                         }
-                        .buttonStyle(.borderless)
-                    }
-                }
 
-                HStack {
-                    TextField("Своё имя процесса", text: $newProcess, prompt: Text("например, Webex"))
-                        .onSubmit(addProcess)
-                    Button("Добавить", action: addProcess)
-                        .disabled(newProcess.trimmingCharacters(in: .whitespaces).isEmpty)
+                        HStack {
+                            TextField("Своё имя процесса", text: $newProcess, prompt: Text("например, Webex"))
+                                .onSubmit(addProcess)
+                            Button("Добавить", action: addProcess)
+                                .disabled(newProcess.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Совпадение по части имени, регистр не важен. Имя работающего процесса видно в Мониторинге системы.")
+                            Text("Не добавляйте сюда программы удалённого доступа целиком (AnyDesk, TeamViewer, RuDesktop): их агенты работают в фоне постоянно, а не только во время сеанса. Процессы, уже работавшие в момент запуска Salary Flow, игнорируются — демонстрация экрана всегда начинается позже.")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 6)
                 }
-            } header: {
-                Text("Процессы, означающие захват экрана")
-            } footer: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Совпадение по части имени, регистр не важен. Имя работающего процесса видно в Мониторинге системы.")
-                    Text("Не добавляйте сюда программы удалённого доступа целиком (AnyDesk, TeamViewer, RuDesktop): их агенты работают в фоне постоянно, а не только во время сеанса. Процессы, уже работавшие в момент запуска Salary Flow, игнорируются — демонстрация экрана всегда начинается позже.")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

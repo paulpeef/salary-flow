@@ -87,8 +87,8 @@ func demoMoodEntries(reference: Date) -> [MoodEntry] {
         let stamp = DayStamp(day, in: calendar)
         // Понедельник тяжелее, пятница легче, последние недели тяжелее всех.
         var pool: [MoodKind] = [.good, .good, .tired, .hard, .bored]
-        if weekday == 2 { pool += [.tired, .nervous, .quit] }
-        if weekday == 6 { pool += [.good, .flow] }
+        if weekday == 2 { pool += [.tired, .nervous, .angry, .quit] }
+        if weekday == 6 { pool += [.good, .flow, .great] }
         if stamp.day >= 21 { pool += [.hard, .bored] }
         if daysBack < 21 { pool += [.tired, .nervous] }
 
@@ -140,15 +140,15 @@ MainActor.assumeIsolated {
     // Панель в разных состояниях дня.
     let working = makeModel { _ in }
     working.overrideNow(moment(2026, 8, 12, 14, 37))
-    render(PanelView(model: working).frame(width: 300), to: "\(outDir)/panel-working.png")
+    render(PanelView(model: working).frame(width: 340), to: "\(outDir)/panel-working.png")
 
     let evening = makeModel { _ in }
     evening.overrideNow(moment(2026, 8, 12, 21, 5))
-    render(PanelView(model: evening).frame(width: 300), to: "\(outDir)/panel-evening.png")
+    render(PanelView(model: evening).frame(width: 340), to: "\(outDir)/panel-evening.png")
 
     let weekend = makeModel { _ in }
     weekend.overrideNow(moment(2026, 8, 15, 12, 0))
-    render(PanelView(model: weekend).frame(width: 300), to: "\(outDir)/panel-weekend.png")
+    render(PanelView(model: weekend).frame(width: 340), to: "\(outDir)/panel-weekend.png")
 
     let vacation = makeModel {
         $0.ranges = [DayRange(from: DayStamp(year: 2026, month: 8, day: 10),
@@ -156,11 +156,18 @@ MainActor.assumeIsolated {
                               kind: .vacation, note: "Турция")]
     }
     vacation.overrideNow(moment(2026, 8, 12, 14, 37))
-    render(PanelView(model: vacation).frame(width: 300), to: "\(outDir)/panel-vacation.png")
+    render(PanelView(model: vacation).frame(width: 340), to: "\(outDir)/panel-vacation.png")
 
     let hidden = makeModel { $0.hideAmount = true }
     hidden.overrideNow(moment(2026, 8, 12, 14, 37))
-    render(PanelView(model: hidden).frame(width: 300), to: "\(outDir)/panel-private.png")
+    render(PanelView(model: hidden).frame(width: 340), to: "\(outDir)/panel-private.png")
+
+    // Второе положение переключателя: месяц наверху и крупно, день — строкой.
+    // Высота обоих снимков должна совпадать, иначе панель при переключении
+    // поедет — окно меню-бара перерисовывает подложку не в такт с содержимым.
+    let monthFirst = makeModel { $0.menuBarTotal = .month }
+    monthFirst.overrideNow(moment(2026, 8, 12, 14, 37))
+    render(PanelView(model: monthFirst).frame(width: 340), to: "\(outDir)/panel-month-first.png")
 
     // Настройки.
     let settingsModel = makeModel {
@@ -174,7 +181,7 @@ MainActor.assumeIsolated {
     let settingsSize = CGSize(width: 700, height: 500)
     let sections: [(SettingsSection, String)] = [
         (.money, "money"), (.schedule, "schedule"), (.specialDays, "days"),
-        (.mood, "mood"), (.appearance, "look"), (.privacy, "privacy")
+        (.counter, "counter"), (.privacy, "privacy"), (.mood, "mood"), (.app, "app")
     ]
     for (section, name) in sections {
         let sectionModel = makeModel { $0.ranges = settingsModel.settings.ranges }
@@ -190,7 +197,7 @@ MainActor.assumeIsolated {
     // сам раздел без окна, во всю высоту (ширина как у правой колонки: 700−190).
     let tallMood = makeModel { _ in }
     tallMood.overrideNow(moment(2026, 8, 12, 14, 37))
-    renderWindow(MoodStatsView(model: tallMood, log: tallMood.mood)
+    renderWindow(MoodStatsView(model: tallMood, log: tallMood.mood, reminders: tallMood.reminders)
                     .environment(\.locale, Locale(identifier: "ru_RU")),
                  size: CGSize(width: 510, height: 2150),
                  to: "\(outDir)/settings-mood-full.png")
