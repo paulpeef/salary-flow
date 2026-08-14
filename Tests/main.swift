@@ -390,13 +390,13 @@ do {
 do {
     // Испорченное значение отдельного поля не должно уносить весь файл.
     let broken = """
-    { "monthlyAmount": 175000, "idleDisplay": "чтототакое", "decimals": "не число",
+    { "monthlyAmount": 175000, "menuBarTotal": "чтототакое", "decimals": "не число",
       "ranges": [ { "from": {"year":2026,"month":9,"day":1}, "to": {"year":2026,"month":9,"day":5} } ] }
     """
     let loaded = decodeSettings(broken)
     check("испорченное поле не уносит весь файл", loaded?.monthlyAmount == 175_000)
     check("испорченный перечислимый тип откатился к значению по умолчанию",
-          loaded?.idleDisplay == .icon)
+          loaded?.menuBarTotal == .day)
     check("испорченное число откатилось к значению по умолчанию", loaded?.decimals == 0)
     check("диапазон без типа дня получил значение по умолчанию", loaded?.ranges.first?.kind == .vacation)
 }
@@ -425,7 +425,7 @@ do {
 do {
     check("по умолчанию копеек нет", AppSettings().decimals == 0,
           "получено \(AppSettings().decimals)")
-    check("текущая версия формата — вторая", AppSettings.currentSchemaVersion == 2)
+    check("текущая версия формата — третья", AppSettings.currentSchemaVersion == 3)
 
     var withKopecks = baseSettings()
     withKopecks.decimals = 2
@@ -679,8 +679,9 @@ do {
     check("индекс «в потоке» = 100", nearly(MoodKind.flow.index, 100))
     check("индекс «не хочу здесь работать» = 0", nearly(MoodKind.quit.index, 0))
     check("индекс «устал» = 25", nearly(MoodKind.tired.index, 25))
-    check("положительных состояний ровно два",
-          MoodKind.allCases.filter(\.isPositive).count == 2)
+    check("положительных состояний ровно три",
+          MoodKind.allCases.filter(\.isPositive).count == 3,
+          "получено \(MoodKind.allCases.filter(\.isPositive).map(\.rawValue))")
     check("«скорее бы домой» весит как скука, а не как желание уйти",
           nearly(MoodKind.homeSoon.index, MoodKind.bored.index)
           && MoodKind.homeSoon.index > MoodKind.quit.index)
@@ -876,8 +877,8 @@ do {
     for day in [3, 4, 5, 6, 7, 10] { quitting.append(moodEntry(.quit, 2026, 8, day, 17, 0)) }
     let quitStats = MoodStats.build(entries: quitting, now: now, window: .month, calendar: moodCalendar)
     let quitInsights = MoodInsights.build(quitStats)
-    check("серия «хочу уйти» поднимает тревогу",
-          quitInsights.contains { $0.level == .alarm && $0.text.contains("Не хочу здесь работать") })
+    check("серия «хочу уволиться» поднимает тревогу",
+          quitInsights.contains { $0.level == .alarm && $0.text.contains("Хочу уволиться") })
     check("тяжёлый фон назван тяжёлым",
           quitInsights.contains { $0.text.contains("Настроение тяжёлое") })
     check("серия тяжёлых дней найдена", quitStats.worstStreak >= 3,
@@ -956,6 +957,175 @@ do {
     let decoded = try! JSONDecoder().decode(AppSettings.self, from: Data(old.utf8))
     check("старый файл настроек оставляет опрос включённым", decoded.moodEnabled)
     check("старый файл настроек не теряет оклад", nearly(decoded.monthlyAmount, 100_000))
+}
+
+// MARK: - Счётчик: что показывать в меню-баре
+
+do {
+    check("по умолчанию счётчик показывает день", AppSettings().menuBarTotal == .day)
+    check("по умолчанию вне рабочего дня суммы нет", AppSettings().idleShowsAmount == false)
+
+    // Файл предыдущей версии: одно поле «вне рабочего дня показывать» отвечало
+    // сразу за два вопроса. Переезд не должен ни потерять выбор, ни сбросить
+    // остальные настройки.
+    func migrated(_ idle: String) -> AppSettings? {
+        decodeSettings("{\"schemaVersion\":2,\"monthlyAmount\":100000,\"idleDisplay\":\"\(idle)\"}")
+    }
+
+    check("«только значок» переехал в «вечером суммы нет»",
+          migrated("icon")?.idleShowsAmount == false)
+    check("«только значок» основной выбор не трогает",
+          migrated("icon")?.menuBarTotal == .day)
+    check("«итог дня» переехал в «за день» плюс «показывать вечером»",
+          migrated("dayTotal")?.menuBarTotal == .day && migrated("dayTotal")?.idleShowsAmount == true)
+    check("«итог месяца» переехал в «за месяц»",
+          migrated("monthTotal")?.menuBarTotal == .month && migrated("monthTotal")?.idleShowsAmount == true)
+    check("оклад при переезде не потерялся",
+          nearly(migrated("monthTotal")?.monthlyAmount ?? 0, 100_000))
+
+    // Файл уже нового формата: старое поле в нём не должно перебивать то,
+    // что человек выбрал после обновления.
+    let modern = decodeSettings("{\"schemaVersion\":3,\"menuBarTotal\":\"month\",\"idleDisplay\":\"dayTotal\"}")
+    check("в новом файле старое поле выбор не перебивает", modern?.menuBarTotal == .month)
+    check("в новом файле старое поле не включает сумму вечером",
+          modern?.idleShowsAmount == false)
+}
+
+// MARK: - Настроение: новые состояния
+
+do {
+    check("состояний десять", MoodKind.allCases.count == 10,
+          "получено \(MoodKind.allCases.count)")
+    check("«прекрасно» — верх шкалы", nearly(MoodKind.great.index, 100))
+    check("«злюсь» весит как тревога", nearly(MoodKind.angry.index, MoodKind.nervous.index))
+    check("злость и тревога разведены по осям", MoodKind.angry.axis != MoodKind.nervous.axis)
+    check("«прекрасно» и «всё хорошо» на одной оси", MoodKind.great.axis == MoodKind.good.axis)
+    check("«прекрасно» тяжелее «всё хорошо»", MoodKind.great.index > MoodKind.good.index)
+    check("эмодзи у всех разные",
+          Set(MoodKind.allCases.map(\.emoji)).count == MoodKind.allCases.count)
+    check("подписи у всех разные",
+          Set(MoodKind.allCases.map(\.short)).count == MoodKind.allCases.count)
+
+    // Ключ в файле — не подпись: переименование не должно стирать историю.
+    check("ключ «тревожно» остался прежним", MoodKind.nervous.rawValue == "nervous")
+    check("ключ «хочу уволиться» остался прежним", MoodKind.quit.rawValue == "quit")
+    check("подпись «тревожно» обновлена", MoodKind.nervous.short == "Тревожно")
+    check("подпись «хочу уволиться» обновлена", MoodKind.quit.short == "Хочу уволиться")
+
+    let old = "{\"version\":1,\"entries\":[{\"at\":\"2026-08-10T14:00:00Z\",\"kind\":\"nervous\"}]}"
+    check("отметка прежней версии читается и после переименования",
+          MoodLog.decode(Data(old.utf8)).entries.first?.kind == .nervous)
+}
+
+// MARK: - Напоминания: время внутри смены
+
+do {
+    let start = moment(2026, 8, 12, 10, 0)
+    let end = moment(2026, 8, 12, 19, 0)
+    let times = MoodReminderRules.times(start: start, end: end)
+
+    check("три напоминания за смену", times.count == MoodReminderRules.perDay,
+          "получено \(times.map { Fmt.clock($0, timeZone: moscow) })")
+    check("первое — через час после начала", times.first == moment(2026, 8, 12, 11, 0),
+          "получено \(times.first.map { Fmt.clock($0, timeZone: moscow) } ?? "нет")")
+    check("второе — в середине смены", times[1] == moment(2026, 8, 12, 14, 30))
+    check("третье — за 45 минут до конца", times[2] == moment(2026, 8, 12, 18, 15))
+    check("время круглое, кратное пяти минутам",
+          times.allSatisfy { Int($0.timeIntervalSince1970) % 300 == 0 })
+    check("напоминания не выходят за границы смены",
+          times.allSatisfy { $0 > start && $0 < end })
+
+    // Короткая смена: три точки не должны слипнуться в одну.
+    let short = MoodReminderRules.times(start: moment(2026, 8, 12, 10, 0),
+                                        end: moment(2026, 8, 12, 12, 0))
+    check("на короткой смене напоминания разнесены",
+          zip(short, short.dropFirst()).allSatisfy {
+              $1.timeIntervalSince($0) >= MoodReminderRules.minimumGap
+          },
+          "получено \(short.map { Fmt.clock($0, timeZone: moscow) })")
+    check("на короткой смене их не больше трёх", short.count <= MoodReminderRules.perDay)
+
+    // Ночная смена переходит через полночь — напоминания едут вместе с ней.
+    let night = MoodReminderRules.times(start: moment(2026, 8, 12, 22, 0),
+                                        end: moment(2026, 8, 13, 6, 0))
+    check("на ночной смене напоминания уезжают за полночь",
+          night.contains { $0 > moment(2026, 8, 13, 0, 0) },
+          "получено \(night.map { Fmt.clock($0, timeZone: moscow) })")
+}
+
+// MARK: - Напоминания: план на неделю
+
+do {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = moscow
+
+    var s = baseSettings()
+    s.ranges = [DayRange(from: DayStamp(year: 2026, month: 8, day: 14),
+                         to: DayStamp(year: 2026, month: 8, day: 14), kind: .vacation)]
+    let e = Engine(settings: s)
+
+    // Ровно то же правило, по которому расписание строит модель.
+    func shift(_ day: DayStamp) -> (start: Date, end: Date)? {
+        guard e.state(of: day, now: day.startOfDay(in: calendar)).isWorkday else { return nil }
+        return e.shift(for: day)
+    }
+
+    let now = moment(2026, 8, 12, 9, 0)          // среда, смена ещё не началась
+    let plan = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift, marks: [])
+
+    check("план не пустой", !plan.isEmpty)
+    check("прошедших моментов в плане нет", plan.allSatisfy { $0 > now })
+    check("план отсортирован по времени", plan == plan.sorted())
+
+    let days = Set(plan.map { DayStamp($0, in: calendar) })
+    check("на сегодня запланированы все три",
+          plan.filter { DayStamp($0, in: calendar) == DayStamp(year: 2026, month: 8, day: 12) }.count == 3)
+    check("суббота в план не попала", !days.contains(DayStamp(year: 2026, month: 8, day: 15)))
+    check("воскресенье в план не попало", !days.contains(DayStamp(year: 2026, month: 8, day: 16)))
+    check("отпускной день пропущен", !days.contains(DayStamp(year: 2026, month: 8, day: 14)),
+          "дни плана: \(days.map(Fmt.day).sorted())")
+
+    // Середина смены: то, что уже прошло, в план не попадает.
+    let midday = MoodReminderRules.plan(now: moment(2026, 8, 12, 15, 0),
+                                        calendar: calendar, shift: shift, marks: [])
+    check("на сегодня осталось одно напоминание",
+          midday.filter { DayStamp($0, in: calendar) == DayStamp(year: 2026, month: 8, day: 12) }.count == 1,
+          "получено \(midday.prefix(3).map { Fmt.clock($0, timeZone: moscow) })")
+
+    // Свежая отметка снимает ближайшее: человек только что ответил на этот вопрос.
+    let justMarked = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
+                                            marks: [moment(2026, 8, 12, 10, 50)])
+    check("свежая отметка снимает ближайшее напоминание",
+          justMarked.count == plan.count - 1,
+          "получено \(justMarked.count) против \(plan.count)")
+    check("остальные напоминания остаются",
+          justMarked.contains(moment(2026, 8, 12, 14, 30)))
+
+    let old = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
+                                     marks: [moment(2026, 8, 10, 12, 0)])
+    check("старая отметка на план не влияет", old.count == plan.count)
+
+    // Никаких рабочих дней впереди — и напоминать не о чем.
+    var fired = baseSettings()
+    fired.hasEmploymentEnd = true
+    fired.employmentEnd = DayStamp(year: 2026, month: 8, day: 11)
+    let afterEnd = Engine(settings: fired)
+    let empty = MoodReminderRules.plan(now: now, calendar: calendar, shift: { day in
+        guard afterEnd.state(of: day, now: day.startOfDay(in: calendar)).isWorkday else { return nil }
+        return afterEnd.shift(for: day)
+    }, marks: [])
+    check("после увольнения напоминаний нет", empty.isEmpty, "получено \(empty.count)")
+}
+
+// MARK: - Напоминания: настройки
+
+do {
+    check("напоминания включены по умолчанию", AppSettings().moodRemindersEnabled)
+
+    // Файл от версии без напоминаний не должен выключать их молча.
+    let old = decodeSettings("{\"schemaVersion\":2,\"monthlyAmount\":100000}")
+    check("старый файл оставляет напоминания включёнными", old?.moodRemindersEnabled == true)
+    check("горизонт планирования — неделя", MoodReminderRules.horizonDays == 7)
 }
 
 // MARK: - Итог

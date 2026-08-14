@@ -21,6 +21,12 @@ final class AppModel: ObservableObject {
             if settings.country != oldValue.country {
                 holidays.setCountry(settings.country)
             }
+            // Разрешение спрашиваем в момент включения тумблера, а не при
+            // запуске: системный вопрос понятен только тогда, когда человек
+            // сам только что попросил напоминать.
+            if remindersWanted, !oldValue.moodEnabled || !oldValue.moodRemindersEnabled {
+                reminders.requestAccessIfNeeded()
+            }
             refresh()
         }
     }
@@ -44,6 +50,10 @@ final class AppModel: ObservableObject {
     /// Журнал отметок настроения. Живёт столько же, сколько приложение:
     /// его читают и панель, и раздел статистики.
     let mood = MoodLog()
+
+    /// Напоминания отметить настроение. Расписание считает модель — только она
+    /// знает, какие дни рабочие и где границы смены.
+    let reminders = MoodReminder()
 
     /// Раздел, открытый в окне настроек. Держится здесь, а не в самом окне,
     /// потому что открывают его снаружи: кнопка «Посмотреть статистику»
@@ -112,6 +122,11 @@ final class AppModel: ObservableObject {
         holidayUpdates = holidays.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+
+        reminders.onOpenPanel = { [weak self] in self?.openPanel() }
+        reminders.onMark = { [weak self] kind in self?.toggleMood(kind) }
+        if remindersWanted { reminders.requestAccessIfNeeded() }
+
         refresh()
     }
 
@@ -164,6 +179,73 @@ final class AppModel: ObservableObject {
             phase: MoodPhase(snapshot.state),
             shiftFraction: snapshot.state == .working ? snapshot.dayProgress : nil
         ))
+        // Человек только что ответил — ближайшее напоминание становится лишним.
+        rescheduleReminders()
+    }
+
+    // MARK: Напоминания
+
+    /// Напоминания имеют смысл только вместе с опросом: спрашивать про то,
+    /// чего в панели нет, было бы издевательством.
+    var remindersWanted: Bool { settings.moodEnabled && settings.moodRemindersEnabled }
+
+    /// Ближайшие напоминания. Публичные и наблюдаемые, потому что их показывают
+    /// и в настройках, и в панели: приложение само выбрало время, и это не
+    /// должно быть тайной — иначе первое же уведомление станет неожиданностью.
+    @Published private(set) var plannedReminders: [Date] = []
+
+    /// День, на который считался последний план.
+    private var remindersPlannedFor: DayStamp?
+
+    /// Ближайшее напоминание.
+    var nextReminder: Date? {
+        let now = frozenNow ?? Date()
+        return plannedReminders.first { $0 > now }
+    }
+
+    /// Напоминания сегодняшнего дня, которые ещё впереди.
+    func remindersLeftToday() -> [Date] {
+        let now = frozenNow ?? Date()
+        let today = DayStamp(now, in: settings.calendar)
+        return plannedReminders.filter { $0 > now && DayStamp($0, in: settings.calendar) == today }
+    }
+
+    /// Пересчитать расписание и отдать его системе, если оно изменилось.
+    ///
+    /// Сравнение с прошлым планом — не микрооптимизация: `refresh()` зовётся
+    /// на каждое нажатие клавиши в поле оклада, а перекладывать из-за этого
+    /// два десятка системных сроков незачем.
+    func rescheduleReminders() {
+        let now = frozenNow ?? Date()
+        remindersPlannedFor = DayStamp(now, in: settings.calendar)
+
+        var plan: [Date] = []
+        if remindersWanted {
+            plan = MoodReminderRules.plan(
+                now: now,
+                calendar: settings.calendar,
+                shift: { day in
+                    guard self.isExpectedWorkday(day) else { return nil }
+                    return self.engine.shift(for: day)
+                },
+                marks: mood.entries.map(\.at)
+            )
+        }
+
+        guard plan != plannedReminders else { return }
+        plannedReminders = plan
+        reminders.schedule(plan, calendar: settings.calendar)
+    }
+
+    /// Раскрыть панель — по нажатию на напоминание.
+    private func openPanel() {
+        guard !panelIsOpen else { return }
+        if !MenuBarPanel.open() {
+            // Пункт меню-бара мог быть спрятан приватным режимом: идёт звонок,
+            // и раскрывать панель с суммами поверх демонстрации экрана — ровно
+            // то, от чего этот режим и защищает.
+            Log.warn("напоминание: панель раскрыть не удалось — пункт меню-бара недоступен")
+        }
     }
 
     /// Как выглядит конкретный день по текущим настройкам и календарю.
@@ -198,7 +280,12 @@ final class AppModel: ObservableObject {
                         officialDaysOff: holidays.officialDaysOff,
                         officialWorkdays: holidays.officialWorkdays)
         snapshot = engine.snapshot(now: frozenNow ?? Date())
-        if frozenNow == nil { rescheduleTimer() }
+        if frozenNow == nil {
+            rescheduleTimer()
+            // График работы, отпуска и производственный календарь задают время
+            // напоминаний — любая правка расчёта их двигает.
+            rescheduleReminders()
+        }
     }
 
     /// Во время смены — раз в секунду, иначе раз в полминуты:
@@ -225,6 +312,10 @@ final class AppModel: ObservableObject {
 
     private func tick() {
         snapshot = engine.snapshot()
+        // Наступили новые сутки — горизонт напоминаний сдвигается на день вперёд.
+        if remindersPlannedFor != DayStamp(snapshot.now, in: settings.calendar) {
+            rescheduleReminders()
+        }
         if desiredInterval() != currentInterval { rescheduleTimer() }
     }
 }

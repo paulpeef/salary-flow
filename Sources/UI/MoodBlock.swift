@@ -8,22 +8,13 @@ import SwiftUI
 struct MoodBlock: View {
     @ObservedObject var model: AppModel
     @ObservedObject var log: MoodLog
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let marks = Set(model.currentMoodMarks())
         let hidden = model.amountsHidden
 
         VStack(alignment: .leading, spacing: 7) {
-            // Заголовок без пояснений: плашки больше ничего не делают молча,
-            // объяснять правила подписью в панели незачем. Полная формулировка
-            // осталась в подсказке при наведении и в разделе статистики.
-            Text("Как вы себя чувствуете?")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .lineLimit(1)
-                .help("Отметок можно поставить сколько нужно, и одно состояние можно отмечать хоть каждый час — как часто вы об этом вспоминаете, тоже данные. Пара минут после отметки плашка остаётся выделенной: нажатие в это время снимает её, если нажали не то.")
+            header
 
             // Плашки раскладываются всегда, даже когда спрятаны: их раскладка
             // задаёт высоту блока, а высота панели должна быть постоянной —
@@ -34,9 +25,57 @@ struct MoodBlock: View {
                 .opacity(hidden ? 0 : 1)
                 .overlay { if hidden { privacyPlaceholder } }
                 .disabled(hidden)
-
-            footer
         }
+    }
+
+    // MARK: Заголовок
+
+    /// Справа от вопроса — ответ на него: когда отмечались в прошлый раз
+    /// и когда приложение напомнит в следующий. Обе строки живут здесь,
+    /// а не отдельным подвалом: подвал стоил целой строки высоты, а видимое
+    /// «след. в 17:45» превращает уведомление из неожиданности в договорённость.
+    private var header: some View {
+        HStack(spacing: 6) {
+            // Заголовок без пояснений: плашки больше ничего не делают молча,
+            // объяснять правила подписью в панели незачем. Полная формулировка
+            // осталась в подсказке при наведении и в разделе статистики.
+            Text("Как вы себя чувствуете?")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .help("Отметок можно поставить сколько нужно, и одно состояние можно отмечать хоть каждый час — как часто вы об этом вспоминаете, тоже данные. Пара минут после отметки плашка остаётся выделенной: нажатие в это время снимает её, если нажали не то.")
+                // Вопрос не жмётся и не обрезается: если строка не помещается,
+                // ужимается приписка справа.
+                .layoutPriority(1)
+
+            Spacer(minLength: 4)
+
+            if !model.amountsHidden, let note = timingNote {
+                Text(note)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.75)
+                    .help("Слева — последняя сегодняшняя отметка, справа — когда приложение напомнит. Отметиться снова можно в любой момент, то же состояние тоже.")
+            }
+        }
+        .lineLimit(1)
+    }
+
+    /// «отмечено в 14:32 · след. в 17:45». Обе половины необязательны,
+    /// но строка всегда одна: высота панели от них зависеть не должна.
+    private var timingNote: String? {
+        let zone = model.settings.timeZone
+        var parts: [String] = []
+        if let at = model.lastMoodMark() {
+            parts.append("отмечено \(Fmt.clock(at, timeZone: zone))")
+        }
+        // Только сегодняшнее: «след. в 11:00» без даты, когда речь про завтра,
+        // читается как «через сорок минут».
+        if model.remindersWanted, let next = model.remindersLeftToday().first {
+            parts.append("след. в \(Fmt.clock(next, timeZone: zone))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     // MARK: Плашки
@@ -91,41 +130,6 @@ struct MoodBlock: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: Подвал блока
-
-    private var footer: some View {
-        HStack(spacing: 6) {
-            Button {
-                activateApp()
-                model.settingsSection = .mood
-                openWindow(id: WindowID.settings)
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chart.xyaxis.line")
-                    Text("Посмотреть статистику")
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(Color.accentColor)
-                .contentShape(Rectangle())
-            }
-            // Именно .plain, а не .link: ссылочный стиль — AppKit-контрол,
-            // и в оффскрин-рендер он не попадает, вместо него знак «нельзя».
-            // Проверять эту кнопку было бы нечем.
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            // Строка всегда одна: подтверждение не должно менять высоту панели.
-            if let at = model.lastMoodMark(), !model.amountsHidden {
-                Text("отмечено в \(Fmt.clock(at, timeZone: model.settings.timeZone))")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .help("Последняя сегодняшняя отметка. Отметиться снова можно в любой момент — то же состояние тоже.")
-            }
-        }
-        .lineLimit(1)
-    }
 }
 
 // MARK: - Облако плашек
@@ -194,11 +198,13 @@ extension MoodKind {
     var tint: Color {
         switch self {
         case .good: return .green
+        case .great: return .teal
         case .flow: return .mint
         case .tired: return .yellow
         case .hard: return .orange
         case .bored: return .gray
         case .nervous: return .purple
+        case .angry: return .pink
         case .homeSoon: return .blue
         case .quit: return .red
         }

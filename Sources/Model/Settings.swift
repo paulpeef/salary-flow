@@ -192,18 +192,40 @@ enum PrivacyAction: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum IdleDisplay: String, Codable, CaseIterable, Identifiable {
+/// Какую сумму показывает счётчик: за сегодня или за месяц.
+///
+/// Выбор один на всё приложение: он же задаёт, какой блок в панели идёт первым
+/// и крупным. Держать в меню-баре одно, а в панели другое было бы враньём —
+/// человек нажимает на цифру именно затем, чтобы посмотреть её подробнее.
+enum MenuBarTotal: String, Codable, CaseIterable, Identifiable {
+    case day
+    case month
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .day: return "За текущий день"
+        case .month: return "За текущий месяц"
+        }
+    }
+
+    /// Короткая подпись — заголовок компактного блока в панели.
+    var short: String {
+        switch self {
+        case .day: return "Сегодня"
+        case .month: return "За месяц"
+        }
+    }
+}
+
+/// Настройка предыдущего формата: одно поле отвечало и за то, показывать ли
+/// сумму вне рабочего дня, и за то, какую именно. Теперь это два вопроса,
+/// потому что второй перестал быть вопросом только про вечер. Тип оставлен,
+/// чтобы прочитать файл, записанный до этой правки, и перевести его.
+enum IdleDisplay: String, Codable {
     case icon
     case dayTotal
     case monthTotal
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .icon: return "Только значок"
-        case .dayTotal: return "Итог дня"
-        case .monthTotal: return "Итог месяца"
-        }
-    }
 }
 
 // MARK: - Настройки
@@ -212,7 +234,7 @@ struct AppSettings: Codable, Equatable {
     /// Версия формата файла. Растёт, когда меняется смысл существующих полей;
     /// добавление новых полей версию не меняет — их подхватывает терпимый разбор.
     var schemaVersion: Int = AppSettings.currentSchemaVersion
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     // Деньги
     var mode: SalaryMode = .monthly
@@ -252,7 +274,13 @@ struct AppSettings: Codable, Equatable {
     /// мельтешение младших разрядов и мешают читать сумму. Кому нужно —
     /// включает на вкладке «Вид».
     var decimals: Int = 0
-    var idleDisplay: IdleDisplay = .icon
+    /// Что считает счётчик: сегодняшний день или весь месяц.
+    /// По умолчанию день — с ним приложение жило до появления выбора.
+    var menuBarTotal: MenuBarTotal = .day
+    /// Показывать ли сумму, когда рабочий день кончился.
+    /// По умолчанию нет: вечером цифра замирает и превращается в шум,
+    /// от которого глаз всё равно отучается.
+    var idleShowsAmount: Bool = false
     var hideAmount: Bool = false
     var showIcon: Bool = true
     var launchAtLogin: Bool = false
@@ -261,6 +289,11 @@ struct AppSettings: Codable, Equatable {
     /// Выключается там же, где смотрится статистика: опрос — не обязательная
     /// часть счётчика, и панель без него просто короче.
     var moodEnabled: Bool = true
+
+    /// Напоминать отметить настроение три раза за смену.
+    /// По умолчанию включено: опрос, о котором не вспоминают, не даёт данных,
+    /// а выключается он одним тумблером там же, где включается опрос.
+    var moodRemindersEnabled: Bool = true
 
     // Приватность
     var privacyOnCamera: Bool = true
@@ -291,6 +324,12 @@ struct AppSettings: Codable, Equatable {
     }
 
     init() {}
+
+    /// Поля, которых в структуре уже нет, но которые могут лежать в файле.
+    /// Синтезированные `CodingKeys` про них не знают — читаем отдельным ключом.
+    private enum LegacyKeys: String, CodingKey {
+        case idleDisplay
+    }
 
     /// Разбор, переживающий любые изменения формата: каждое поле читается
     /// отдельно и при отсутствии или порче откатывается к значению по умолчанию.
@@ -323,11 +362,32 @@ struct AppSettings: Codable, Equatable {
         ranges = c.value(.ranges, or: d.ranges)
 
         decimals = c.value(.decimals, or: d.decimals)
-        idleDisplay = c.value(.idleDisplay, or: d.idleDisplay)
+        menuBarTotal = c.value(.menuBarTotal, or: d.menuBarTotal)
+        idleShowsAmount = c.value(.idleShowsAmount, or: d.idleShowsAmount)
         hideAmount = c.value(.hideAmount, or: d.hideAmount)
         showIcon = c.value(.showIcon, or: d.showIcon)
         launchAtLogin = c.value(.launchAtLogin, or: d.launchAtLogin)
         moodEnabled = c.value(.moodEnabled, or: d.moodEnabled)
+        moodRemindersEnabled = c.value(.moodRemindersEnabled, or: d.moodRemindersEnabled)
+
+        // Файл до третьей версии формата: поле «вне рабочего дня показывать»
+        // разошлось на два — что показывать вообще и показывать ли вечером.
+        // Перевод делается здесь, а не в хранилище, чтобы старый файл читался
+        // правильно везде, включая тесты и инструменты.
+        if schemaVersion < 3,
+           let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
+           let idle = try? legacy.decodeIfPresent(IdleDisplay.self, forKey: .idleDisplay) {
+            switch idle {
+            case .icon:
+                idleShowsAmount = false
+            case .dayTotal:
+                menuBarTotal = .day
+                idleShowsAmount = true
+            case .monthTotal:
+                menuBarTotal = .month
+                idleShowsAmount = true
+            }
+        }
 
         privacyOnCamera = c.value(.privacyOnCamera, or: d.privacyOnCamera)
         privacyOnCapture = c.value(.privacyOnCapture, or: d.privacyOnCapture)
@@ -399,7 +459,12 @@ final class SettingsStore: ObservableObject {
                     // Копейки стали выключены по умолчанию — переводим и тех,
                     // у кого они остались от прежней версии.
                     upgraded.decimals = 0
-                    Log.info("копейки на счётчике выключены (их можно вернуть на вкладке «Вид»)")
+                    Log.info("копейки на счётчике выключены (их можно вернуть в разделе «Счётчик»)")
+                }
+                if upgraded.schemaVersion < 3 {
+                    // Сам перевод сделан при разборе — здесь только след в журнале,
+                    // чтобы по нему было видно, откуда взялось новое значение.
+                    Log.info("счётчик в меню-баре: показывает \(upgraded.menuBarTotal.title.lowercased()), вне рабочего дня сумма \(upgraded.idleShowsAmount ? "остаётся" : "убирается")")
                 }
                 upgraded.schemaVersion = AppSettings.currentSchemaVersion
                 settings = upgraded

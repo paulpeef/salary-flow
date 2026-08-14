@@ -12,24 +12,35 @@ struct PanelView: View {
     var body: some View {
         let s = model.snapshot
 
-        VStack(alignment: .leading, spacing: 14) {
+        // Отступ 10, а не 14: девять промежутков по 14 съедали 126 точек —
+        // каждый пятый пиксель панели был пустым. Линии-разделители стоят
+        // только там, где меняется голос: после пары главных цифр и перед
+        // рядом кнопок. Между «сегодня» и «за месяц» линия не нужна — это
+        // одна мысль в двух масштабах.
+        VStack(alignment: .leading, spacing: 10) {
             statusRow(s)
-            // «Сегодня» выше месяца по просьбе владельца: в первую очередь
-            // смотрят на текущий день, а итог месяца — уже следующий вопрос.
-            todayBlock(s)
-            Divider()
-            monthBlock(s)
+            // Первым и крупным идёт то, что выбрано для меню-бара: на цифру
+            // нажали затем, чтобы посмотреть её подробнее, и искать её глазами
+            // в середине панели человек не должен. Второй итог остаётся тут же,
+            // компактной строкой, — он всегда нужен следующим вопросом.
+            //
+            // Высота панели от порядка не зависит: крупный блок всегда ровно
+            // один и компактный ровно один, меняются они только местами.
+            hero(model.settings.menuBarTotal == .day ? today(s) : month(s))
+            compact(model.settings.menuBarTotal == .day ? month(s) : today(s))
             Divider()
             statsBlock(s)
             if model.settings.moodEnabled {
-                Divider()
                 MoodBlock(model: model, log: model.mood)
             }
             Divider()
             buttons
         }
         .padding(14)
-        .frame(width: 300)
+        // 340, а не 300: десятая плашка опроса не помещалась в три строки,
+        // а четвёртая строка — это лишние 26 точек высоты и разъехавшееся
+        // облако. Заодно перестали жаться строки с суммами.
+        .frame(width: 340)
         // Высота панели теперь постоянна, но подстраховка остаётся: любое
         // изменение размера должно происходить одним шагом, иначе окно
         // меню-бара перерисовывает подложку не в такт с содержимым.
@@ -99,16 +110,54 @@ struct PanelView: View {
         }
     }
 
-    // MARK: Месяц — главный блок
+    // MARK: Итоги дня и месяца
 
-    private func monthBlock(_ s: Snapshot) -> some View {
+    /// Всё, что нужно нарисовать про один итог. Оба итога описываются одинаково,
+    /// поэтому крупный и компактный вид — это две функции, а не два блока:
+    /// иначе четыре сочетания пришлось бы держать в согласии руками.
+    private struct Totals {
+        var heroCaption: String
+        var caption: String
+        var earned: Double
+        var full: Double
+        var progress: Double
+        var hint: String
+        var tint: Color
+    }
+
+    private func today(_ s: Snapshot) -> Totals {
+        Totals(heroCaption: "Заработано сегодня",
+               caption: "Сегодня",
+               earned: s.todayEarned,
+               full: s.todayFull,
+               progress: s.dayProgress,
+               hint: dayHint(s),
+               tint: s.state == .working ? .accentColor : .secondary)
+    }
+
+    private func month(_ s: Snapshot) -> Totals {
+        let name = Fmt.monthName(s.now, timeZone: model.settings.timeZone)
+        return Totals(heroCaption: "Заработано за \(name)",
+                      caption: "За \(name)",
+                      earned: s.monthEarned,
+                      full: s.monthProjected,
+                      progress: s.monthProgress,
+                      // Не «43% месяца»: непонятно, процент времени это или
+                      // денег. Дни отвечают на тот же вопрос без двусмысленности.
+                      hint: "Оплачено дней: \(s.paidDaysDone) из \(s.paidDaysTotal)",
+                      tint: .green)
+    }
+
+    /// Крупный вид: то, зачем панель открыли.
+    private func hero(_ t: Totals) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Заработано за \(Fmt.monthName(s.now, timeZone: model.settings.timeZone))")
+            Text(t.heroCaption)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
+                .lineLimit(1)
 
-            Text(model.amountsHidden ? "••• •••" : money.string(s.monthEarned))
+            Text(model.amountsHidden ? "••• •••" : money.string(t.earned))
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
@@ -116,39 +165,40 @@ struct PanelView: View {
                 .foregroundStyle(Color.green)
                 .contentTransition(.numericText())
 
-            ProgressBar(value: s.monthProgress, tint: .green)
+            ProgressBar(value: t.progress, tint: t.tint)
 
             HStack {
-                Text("\(Fmt.percent(s.monthProgress)) месяца")
+                Text(t.hint)
                 Spacer()
-                Text("из \(model.amountsHidden ? "•••" : moneyRounded.string(s.monthProjected))")
+                Text("из \(model.amountsHidden ? "•••" : moneyRounded.string(t.full))")
             }
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .monospacedDigit()
+            .lineLimit(1)
         }
     }
 
-    // MARK: Сегодня
-
-    private func todayBlock(_ s: Snapshot) -> some View {
+    /// Компактный вид: второй итог, который всё равно спросят следующим.
+    private func compact(_ t: Totals) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Сегодня").font(.system(size: 11)).foregroundStyle(.secondary).textCase(.uppercase)
+                Text(t.caption).font(.system(size: 11)).foregroundStyle(.secondary).textCase(.uppercase)
                 Spacer()
-                Text(model.amountsHidden ? "•••" : "\(money.string(s.todayEarned)) / \(moneyRounded.string(s.todayFull))")
+                Text(model.amountsHidden ? "•••" : "\(money.string(t.earned)) / \(moneyRounded.string(t.full))")
                     .font(.system(size: 12, weight: .medium))
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
-            ProgressBar(value: s.dayProgress, tint: s.state == .working ? .accentColor : .secondary)
+            ProgressBar(value: t.progress, tint: t.tint)
             HStack {
-                Text(dayHint(s))
+                Text(t.hint)
                 Spacer()
             }
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
         }
+        .lineLimit(1)
     }
 
     private func dayHint(_ s: Snapshot) -> String {
@@ -177,24 +227,30 @@ struct PanelView: View {
 
     // MARK: Мелкая статистика
 
+    /// Было пять одинаковых серых строк без всякой иерархии — самый плохо
+    /// читаемый кусок панели, а в приватном режиме ещё и пять одинаковых
+    /// «•••» подряд, похожих на сбой отрисовки.
+    ///
+    /// «В минуту» убрано: производная от «в час», не меняется за день, а два
+    /// знака после запятой делают её похожей на живую. «Норма месяца» уехала
+    /// в «Деньги → Что получается»: это вход расчёта, по нему в панели ничего
+    /// не решают. «Оплачено дней» переехало под цифру месяца, где отвечает
+    /// на вопрос «сколько ещё». Осталось то, что нельзя посчитать в уме.
     private func statsBlock(_ s: Snapshot) -> some View {
-        VStack(spacing: 4) {
-            statRow("В час", money.string(s.perHour))
-            statRow("В минуту", MoneyFormatter(settings: model.settings, decimals: 2).string(s.perSecond * 60))
-            statRow("Дневная ставка", moneyRounded.string(s.dailyRate))
-            statRow("Оплачено дней", "\(s.paidDaysDone) из \(s.paidDaysTotal)")
-            statRow("Норма месяца", Fmt.days(s.normDays))
-        }
+        statRow("Ставка", "\(moneyRounded.string(s.dailyRate)) в день · \(moneyRounded.string(s.perHour)) в час")
     }
 
     private func statRow(_ title: String, _ value: String) -> some View {
         HStack {
             Text(title)
             Spacer()
-            Text(model.amountsHidden ? "•••" : value).monospacedDigit()
+            // В мелких строках прочерк, а не точки: «•••» должно быть жестом
+            // («тут спрятана сумма»), и работает он только на крупной цифре.
+            Text(model.amountsHidden ? "—" : value).monospacedDigit()
         }
         .font(.system(size: 11))
         .foregroundStyle(.secondary)
+        .lineLimit(1)
     }
 
     // MARK: Кнопки
@@ -202,10 +258,22 @@ struct PanelView: View {
     private var buttons: some View {
         HStack(spacing: 8) {
             Button {
-                activateApp()
-                openWindow(id: WindowID.settings)
+                openSettings()
             } label: {
                 Label("Настройки", systemImage: "gearshape")
+            }
+
+            // Ссылка «Посмотреть статистику» переехала сюда из середины блока
+            // опроса: там она весила целую строку и перетягивала внимание
+            // синим цветом с плашек — единственного места в панели, где от
+            // человека ждут действия.
+            if model.settings.moodEnabled {
+                Button {
+                    openSettings(.mood)
+                } label: {
+                    Image(systemName: "chart.xyaxis.line")
+                }
+                .help("Статистика настроения")
             }
 
             Spacer()
@@ -224,6 +292,10 @@ struct PanelView: View {
                 Image(systemName: model.amountsHidden ? "eye.slash" : "eye")
             }
             .help(eyeHint)
+            // Скрытие — это режим, а не действие: одной сменой глифа его
+            // не заметить. Оранжевый — тот же, которым подсвечена причина
+            // в строке состояния.
+            .tint(model.amountsHidden ? Color.orange : nil)
 
             Button {
                 NSApplication.shared.terminate(nil)
@@ -231,9 +303,20 @@ struct PanelView: View {
                 Image(systemName: "power")
             }
             .help("Выйти")
+            // Отступ от кнопки-глаза: промах во время видеозвонка не должен
+            // выключать приложение.
+            .padding(.leading, 10)
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+    }
+
+    /// Открыть окно настроек, при необходимости сразу на нужном разделе.
+    /// Без раздела окно остаётся там, где его закрыли.
+    private func openSettings(_ section: SettingsSection? = nil) {
+        activateApp()
+        if let section { model.settingsSection = section }
+        openWindow(id: WindowID.settings)
     }
 }
 

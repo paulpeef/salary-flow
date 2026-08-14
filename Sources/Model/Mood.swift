@@ -12,9 +12,14 @@ import Foundation
 /// Порядок объявления — это и порядок плашек в панели: сначала хорошее,
 /// потом всё остальное. «Всё хорошо» идёт первым сознательно: если человеку
 /// нормально, он не должен пробираться к своему ответу через список жалоб.
+/// Названия состояний менялись и ещё будут меняться, а `rawValue` — нет:
+/// это ключ, которым отметка лежит в файле. Переименование подписи историю
+/// не трогает, переименование `case` стёрло бы её молча.
 enum MoodKind: String, Codable, CaseIterable, Identifiable {
     /// Ровный фон: ничего особенного, всё в порядке.
     case good
+    /// Не просто нормально, а хорошо.
+    case great
     /// Работа идёт, увлекает, время летит.
     case flow
     /// Кончились силы.
@@ -23,12 +28,14 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
     case hard
     /// Скучно: делать нечего или дело не занимает.
     case bored
-    /// Нервно, на пределе, тревожно.
+    /// Тревожно, на пределе.
     case nervous
+    /// Злость и раздражение — на людей, задачи или порядки.
+    case angry
     /// Считает часы до конца дня: работа не невыносима, но хочется, чтобы
     /// она уже кончилась.
     case homeSoon
-    /// «Не хочу здесь работать» — отметка про отношение к работе целиком.
+    /// «Хочу уволиться» — отметка про отношение к работе целиком.
     case quit
 
     var id: String { rawValue }
@@ -41,13 +48,15 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
     var short: String {
         switch self {
         case .good: return "Всё хорошо"
+        case .great: return "Прекрасно"
         case .flow: return "В потоке"
         case .tired: return "Устал"
         case .hard: return "Тяжело"
         case .bored: return "Скучно"
-        case .nervous: return "Нервно"
+        case .nervous: return "Тревожно"
+        case .angry: return "Злюсь"
         case .homeSoon: return "Скорее бы домой"
-        case .quit: return "Хочу уйти"
+        case .quit: return "Хочу уволиться"
         }
     }
 
@@ -55,26 +64,31 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .good: return "всё хорошо"
+        case .great: return "прекрасно"
         case .flow: return "в потоке"
         case .tired: return "устал"
         case .hard: return "тяжело работается"
         case .bored: return "скучно"
-        case .nervous: return "нервно"
+        case .nervous: return "тревожно"
+        case .angry: return "злюсь"
         case .homeSoon: return "скорее бы домой"
-        case .quit: return "не хочу здесь работать"
+        case .quit: return "хочу уволиться"
         }
     }
 
     var emoji: String {
         switch self {
         case .good: return "🙂"
-        case .flow: return "🔥"
+        case .great: return "😄"
+        // Волна, а не огонь: поток — это когда несёт, а не когда горит.
+        case .flow: return "🌊"
         case .tired: return "😴"
         // Составные эмодзи (вроде «😮‍💨») в панели рисуются как попало —
         // берём простые односимвольные.
         case .hard: return "😓"
         case .bored: return "🥱"
         case .nervous: return "😬"
+        case .angry: return "😠"
         case .homeSoon: return "🏠"
         case .quit: return "🚪"
         }
@@ -84,24 +98,29 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
     var hint: String {
         switch self {
         case .good: return "Ничего особенного, всё в порядке"
+        case .great: return "Не просто нормально, а хорошо — редкое и ценное состояние"
         case .flow: return "Работа идёт, увлекает, время летит"
         case .tired: return "Кончились силы"
         case .hard: return "Тяжело работается — не в смысле «нет сил», а именно тяжело"
         case .bored: return "Скучно: делать нечего или дело не занимает"
-        case .nervous: return "Нервно, на пределе"
+        case .nervous: return "Тревожно, на пределе"
+        case .angry: return "Злит и раздражает — люди, задачи или порядки"
         case .homeSoon: return "Считаю часы до конца дня"
-        case .quit: return "Не хочу здесь работать"
+        case .quit: return "Хочу уволиться — это не про сегодняшний день, а про работу целиком"
         }
     }
 
     /// От −2 (совсем плохо) до +2 (хорошо).
     ///
-    /// Веса не выдуманы поровну: «тяжело» и «нервно» тяжелее простой усталости,
-    /// а «не хочу здесь работать» — предел шкалы, потому что это уже не про
+    /// Веса не выдуманы поровну: «тяжело», «тревожно» и «злюсь» тяжелее простой
+    /// усталости, а «хочу уволиться» — предел шкалы, потому что это уже не про
     /// сегодняшний день. Из этих весов считается индекс настроения, и от них
     /// зависят все выводы — менять их значит менять историю задним числом.
     var valence: Double {
         switch self {
+        // Верх шкалы занимают двое, и это не дубли: «прекрасно» — про общий
+        // фон, «в потоке» — про работу. Бывает и одно без другого.
+        case .great: return 2
         case .flow: return 2
         case .good: return 1
         case .tired: return -1
@@ -113,6 +132,9 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
         case .homeSoon: return -1
         case .hard: return -1.5
         case .nervous: return -1.5
+        // Злость весит как тревога: обе про то, что изнашивается быстрее сил
+        // и выходными не восстанавливается.
+        case .angry: return -1.5
         case .quit: return -2
         }
     }
@@ -127,12 +149,16 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
     /// беды с разными решениями.
     var axis: MoodAxis {
         switch self {
-        case .good: return .mood
+        case .good, .great: return .mood
         // «Скорее бы домой» — про то же, что и скука: работа не занимает.
         case .flow, .bored, .homeSoon: return .interest
         case .tired: return .energy
         case .hard: return .load
         case .nervous: return .nerves
+        // Злость и тревога разведены намеренно: тревога — про неопределённость
+        // и давление, злость — про столкновение с людьми и порядками. Лечатся
+        // они разным, и складывать их в одну ось значит потерять разницу.
+        case .angry: return .anger
         case .quit: return .loyalty
         }
     }
@@ -140,7 +166,7 @@ enum MoodKind: String, Codable, CaseIterable, Identifiable {
 
 /// По чему именно проседает настроение.
 enum MoodAxis: String, Codable, CaseIterable, Identifiable {
-    case mood, energy, interest, load, nerves, loyalty
+    case mood, energy, interest, load, nerves, anger, loyalty
 
     var id: String { rawValue }
 
@@ -151,6 +177,7 @@ enum MoodAxis: String, Codable, CaseIterable, Identifiable {
         case .interest: return "интерес"
         case .load: return "нагрузка"
         case .nerves: return "нервы"
+        case .anger: return "злость"
         case .loyalty: return "отношение к работе"
         }
     }

@@ -103,6 +103,12 @@ enum Fmt {
         return "\(n) \(many)"
     }
 
+    /// «12:15, 15:00 и 17:45» — перечисление по-русски, с «и» перед последним.
+    static func list(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " и " + (items.last ?? "")
+    }
+
     /// Индекс настроения — целым числом: доли балла тут ничего не значат.
     static func index(_ value: Double) -> String {
         "\(Int(value.rounded()))"

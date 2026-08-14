@@ -12,6 +12,7 @@ swiftc -O \
   Sources/Model/Holidays.swift Sources/Model/WorkCalendar.swift \
   Sources/Model/Formatting.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
+  Sources/Model/Reminders.swift \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift \
   Sources/Support/PrivacyMonitor.swift \
