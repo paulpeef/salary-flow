@@ -248,7 +248,7 @@ Sources/
     MoodReminder.swift    локальные уведомления и раскрытие панели из кода
     Updater.swift         обновления через Sparkle
     AppDelegate.swift     единственный экземпляр, жизненный цикл
-Tests/main.swift          проверки: ядро, приватность, настройки, статистика и напоминания
+Tests/main.swift          244 проверки: ядро, приватность, настройки, статистика, напоминания
 Tools/RenderPreview/      оффскрин-рендер интерфейса в PNG
 Tools/WindowProbe/        зонд настоящего окна: геометрия и хром
 .github/workflows/        сборка релиза по тегу
