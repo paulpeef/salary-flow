@@ -295,6 +295,11 @@ struct AppSettings: Codable, Equatable {
     /// а выключается он одним тумблером там же, где включается опрос.
     var moodRemindersEnabled: Bool = true
 
+    /// Чем напоминать: уведомлением или раскрытой панелью.
+    /// По умолчанию уведомлением — так напоминание догонит и того, кто сидит
+    /// в другом приложении во весь экран.
+    var moodReminderStyle: MoodReminderStyle = .notification
+
     // Приватность
     var privacyOnCamera: Bool = true
     var privacyOnCapture: Bool = true
@@ -369,6 +374,7 @@ struct AppSettings: Codable, Equatable {
         launchAtLogin = c.value(.launchAtLogin, or: d.launchAtLogin)
         moodEnabled = c.value(.moodEnabled, or: d.moodEnabled)
         moodRemindersEnabled = c.value(.moodRemindersEnabled, or: d.moodRemindersEnabled)
+        moodReminderStyle = c.value(.moodReminderStyle, or: d.moodReminderStyle)
 
         // Файл до третьей версии формата: поле «вне рабочего дня показывать»
         // разошлось на два — что показывать вообще и показывать ли вечером.

@@ -393,12 +393,25 @@ struct MoodStatsView: View {
             Toggle("Спрашивать в панели", isOn: $model.settings.moodEnabled)
             Toggle("Напоминать отметить настроение", isOn: $model.settings.moodRemindersEnabled)
                 .disabled(!model.settings.moodEnabled)
-            if model.remindersWanted { reminderStatus }
+            if model.remindersWanted {
+                Picker("Чем напоминать", selection: $model.settings.moodReminderStyle) {
+                    ForEach(MoodReminderStyle.allCases) { Text($0.title).tag($0) }
+                }
+                reminderStatus
+            }
         } header: {
             Text("Опрос")
         } footer: {
-            Text("Три напоминания за смену: время считается по рабочему дню и едет само, когда меняется график. В выходные, праздники и отпуск напоминаний нет; если вы только что отметились, ближайшее пропускается. Отвечать можно прямо из уведомления или нажать на него — раскроется панель.")
-                .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Три напоминания за смену: время считается по рабочему дню и едет само, когда меняется график. В выходные, праздники и отпуск напоминаний нет; если вы только что отметились, ближайшее пропускается.")
+                switch model.settings.moodReminderStyle {
+                case .notification:
+                    Text("Отвечать можно прямо из уведомления или нажать на него — раскроется панель.")
+                case .panel:
+                    Text("Панель раскроется сама, без уведомления: разрешения для этого не нужно вовсе. Но и увидеть её можно только за этим компьютером — пропущенное напоминание нигде не остаётся, а если в этот момент идёт звонок или запись экрана, панель не раскроется совсем.")
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary)
         }
         // Раздел открыли — перечитываем разрешение. Смотрят сюда как раз затем,
         // чтобы проверить, дойдут ли напоминания, и показывать здесь ответ,
@@ -411,6 +424,18 @@ struct MoodStatsView: View {
     /// уведомление станет неожиданностью.
     @ViewBuilder
     private var reminderStatus: some View {
+        // Панель раскрывает само приложение — системе уведомлений тут делать
+        // нечего, и весь её обвес (разрешение, стиль показа, проверка доставки)
+        // в этом режиме был бы разговором ни о чём.
+        if model.settings.moodReminderStyle == .panel {
+            reminderScheduleRow
+        } else {
+            notificationStatus
+        }
+    }
+
+    @ViewBuilder
+    private var notificationStatus: some View {
         switch reminders.access {
         case .denied:
             // Что именно включить — сказано прямо: в системных настройках
@@ -429,12 +454,7 @@ struct MoodStatsView: View {
             Text("В этой сборке уведомления недоступны")
                 .foregroundStyle(.secondary)
         case .notAsked, .granted:
-            LabeledContent("Напомню") {
-                Text(reminderSchedule)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .multilineTextAlignment(.trailing)
-            }
+            reminderScheduleRow
         }
         if let refusal = reminders.systemRefusal {
             // Отказ принять запрос — не запрет: так бывает сразу после
@@ -447,6 +467,18 @@ struct MoodStatsView: View {
             .fixedSize(horizontal: false, vertical: true)
         }
         reminderTest
+    }
+
+    /// Когда именно придёт следующее напоминание. Нужно в обоих способах:
+    /// «три раза в день» без времени — чёрный ящик, и первое напоминание,
+    /// уведомлением оно придёт или раскрытой панелью, станет неожиданностью.
+    private var reminderScheduleRow: some View {
+        LabeledContent("Напомню") {
+            Text(reminderSchedule)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .multilineTextAlignment(.trailing)
+        }
     }
 
     private func reminderProblem(_ text: String, hint: String) -> some View {

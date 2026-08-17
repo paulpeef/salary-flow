@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// То, что видно в строке меню: капля и сумма — за сегодня или за месяц,
@@ -6,13 +7,52 @@ import SwiftUI
 struct MenuBarLabel: View {
     @ObservedObject var model: AppModel
 
+    /// Своя капля вместо системного символа.
+    ///
+    /// Картинка шаблонная: цвета в ней нет, система красит её сама — под тему,
+    /// под подсветку открытого меню и под строку меню на цветных обоях.
+    /// Путь можно переопределить переменной окружения: у превью и зондов бандла
+    /// нет, а посмотреть на значок надо — ровно как с настройками и журналом.
+    static let drop: NSImage? = {
+        let image: NSImage?
+        if let custom = ProcessInfo.processInfo.environment["SALARYFLOW_MENUBAR_ICON"],
+           !custom.isEmpty {
+            image = NSImage(contentsOfFile: (custom as NSString).expandingTildeInPath)
+        } else {
+            image = NSImage(named: "MenuBarIcon")
+        }
+        image?.isTemplate = true
+        return image
+    }()
+
+    /// Идёт ли начисление прямо сейчас. Полная капля — деньги капают,
+    /// приглушённая — нет; в приватном режиме тоже приглушённая, потому что
+    /// «сколько накапало» в этот момент не показывается.
+    private var dripping: Bool {
+        !model.amountsHidden && model.snapshot.state == .working
+    }
+
     var body: some View {
         let s = model.snapshot
 
         HStack(spacing: 4) {
             if model.settings.showIcon {
-                Image(systemName: model.amountsHidden ? "drop"
-                      : (s.state == .working ? "drop.fill" : "drop"))
+                if let drop = MenuBarLabel.drop {
+                    Image(nsImage: drop)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        // Высота подогнана к цифрам рядом: своя картинка не
+                        // масштабируется вместе со шрифтом, как это делает
+                        // системный символ, и без рамки капля вылезала выше строки.
+                        .frame(width: 13, height: 13)
+                        .opacity(dripping ? 1 : 0.45)
+                } else {
+                    // Бандла нет — значит это превью или зонд, и картинку
+                    // взять неоткуда. Системный символ здесь только затем,
+                    // чтобы на месте значка не было пустоты.
+                    Image(systemName: dripping ? "drop.fill" : "drop")
+                }
             }
             // Пока панель открыта, ширина значка не должна меняться: она задаёт
             // точку, к которой панель прицеплена, и от скачка ширины панель

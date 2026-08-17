@@ -59,6 +59,13 @@ func makeModel(_ mutate: (inout AppSettings) -> Void) -> AppModel {
     s.currencyCode = "RUB"
     s.timeZoneID = "Europe/Moscow"
     s.employmentStart = DayStamp(year: 2026, month: 8, day: 12)
+    // Детекторы приватности выключены: иначе снимки зависят от того, идёт ли
+    // на этой машине звонок прямо сейчас. Так и вышло 2026-08-17 — все превью
+    // отрендерились со спрятанными суммами, потому что у владельца была
+    // включена камера, и на значке меню-бара пропали цифры. Приватные
+    // состояния показываем явным `hideAmount`, а не совпадением обстоятельств.
+    s.privacyOnCamera = false
+    s.privacyOnCapture = false
     mutate(&s)
     model.settings = s
     return model
@@ -168,6 +175,21 @@ MainActor.assumeIsolated {
     let monthFirst = makeModel { $0.menuBarTotal = .month }
     monthFirst.overrideNow(moment(2026, 8, 12, 14, 37))
     render(PanelView(model: monthFirst).frame(width: 340), to: "\(outDir)/panel-month-first.png")
+
+    // Значок строки меню. Саму строку оффскрин не воспроизвести, а вот метку
+    // с каплей и цифрами — можно, и это единственный способ увидеть свою
+    // картинку рядом с текстом до установки: подогнана ли высота, не вылезает
+    // ли капля над строкой, отличима ли приглушённая от полной.
+    // Цвет и подложка заданы явно: в настоящей строке меню их даёт система,
+    // а оффскрин рисует метку системным цветом по прозрачному фону — на нём
+    // не видно ни текста, ни того, совпадают ли капля и цифры по высоте.
+    for (name, source) in [("working", working), ("evening", evening), ("private", hidden)] {
+        render(MenuBarLabel(model: source)
+                .foregroundStyle(.black)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color(white: 0.92)),
+               to: "\(outDir)/menubar-\(name).png", scale: 8)
+    }
 
     // Настройки.
     let settingsModel = makeModel {

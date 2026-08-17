@@ -1192,6 +1192,51 @@ do {
               .contains("Notifications are not allowed"))
 }
 
+// MARK: - Напоминания: раскрытие панели вместо уведомления
+
+do {
+    check("по умолчанию напоминают уведомлением",
+          AppSettings().moodReminderStyle == .notification)
+
+    // Файл от версии без выбора способа не должен молча переводить человека
+    // на раскрытие панели: он этого не просил.
+    let old = """
+    {"schemaVersion":3,"monthlyAmount":100000,"moodRemindersEnabled":true}
+    """
+    let decoded = try! JSONDecoder().decode(AppSettings.self, from: Data(old.utf8))
+    check("старый файл настроек оставляет напоминания уведомлением",
+          decoded.moodReminderStyle == .notification)
+
+    let due = moment(2026, 8, 12, 15, 0)
+
+    check("до срока ждём",
+          PanelReminderRules.verdict(now: moment(2026, 8, 12, 14, 59), due: due) == .wait)
+    check("срок подошёл — раскрываем",
+          PanelReminderRules.verdict(now: due, due: due) == .open)
+    check("минута опоздания раскрытию не мешает",
+          PanelReminderRules.verdict(now: due.addingTimeInterval(60), due: due) == .open)
+    check("на границе окна ещё раскрываем",
+          PanelReminderRules.verdict(now: due.addingTimeInterval(PanelReminderRules.lateness),
+                                     due: due) == .open)
+    // Компьютер спал полдня — панель, выскочившая сейчас, спросит про «сейчас»,
+    // а это уже совсем другое «сейчас».
+    check("опоздание больше окна — срок пропускаем",
+          PanelReminderRules.verdict(now: due.addingTimeInterval(PanelReminderRules.lateness + 1),
+                                     due: due) == .skip)
+    check("ждать нечего, когда срока нет",
+          PanelReminderRules.verdict(now: due, due: nil) == .wait)
+
+    let plan = [moment(2026, 8, 12, 11, 0), moment(2026, 8, 12, 15, 0), moment(2026, 8, 12, 18, 30)]
+    check("следующий срок берётся ближайший из будущих",
+          PanelReminderRules.next(after: moment(2026, 8, 12, 12, 0), in: plan)
+              == moment(2026, 8, 12, 15, 0))
+    check("наступивший срок следующим не считается",
+          PanelReminderRules.next(after: moment(2026, 8, 12, 15, 0), in: plan)
+              == moment(2026, 8, 12, 18, 30))
+    check("после последнего срока следующего нет",
+          PanelReminderRules.next(after: moment(2026, 8, 12, 19, 0), in: plan) == nil)
+}
+
 // MARK: - Копия для переезда
 
 do {

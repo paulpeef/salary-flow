@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="SalaryFlow"
 BUNDLE_ID="io.github.paulpeef.salaryflow"
-VERSION="${VERSION:-1.10}"
+VERSION="${VERSION:-1.11}"
 FEED_URL="https://raw.githubusercontent.com/paulpeef/salary-flow/main/appcast.xml"
 # Публичный ключ проверки обновлений. Приватный лежит в связке ключей
 # разработчика и в секретах репозитория — сюда он не попадает никогда.
@@ -65,7 +65,24 @@ swiftc -parse-as-library -O \
 # Фреймворк едет внутри бандла: rpath выше указывает именно сюда.
 # Снимки производственных календарей: с ними приложение знает праздники
 # сразу после установки, ещё до первого выхода в сеть.
-cp Resources/* "$APP/Contents/Resources/"
+# AppIcon.png не копируется: это исходник иконки, в бандле нужен только .icns,
+# который собирается из него ниже.
+find Resources -type f ! -name 'AppIcon.png' -exec cp {} "$APP/Contents/Resources/" \;
+
+# Иконка приложения: набор размеров собирается из одного PNG на 1024.
+# Хранить в репозитории десять готовых файлов незачем — их всегда можно
+# пересобрать, а разъехаться между собой они не смогут.
+echo "→ Иконка"
+ICONSET="$BUILD_DIR/AppIcon.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET"
+for pair in "16 16x16" "32 16x16@2x" "32 32x32" "64 32x32@2x" \
+            "128 128x128" "256 128x128@2x" "256 256x256" \
+            "512 256x256@2x" "512 512x512" "1024 512x512@2x"; do
+  set -- $pair
+  sips -z "$1" "$1" Resources/AppIcon.png --out "$ICONSET/icon_$2.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
 mkdir -p "$APP/Contents/Frameworks"
 cp -R "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/"
@@ -79,6 +96,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleName</key><string>$APP_NAME</string>
   <key>CFBundleDisplayName</key><string>Salary Flow</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>

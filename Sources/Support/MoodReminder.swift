@@ -354,12 +354,21 @@ final class MoodReminder: NSObject, ObservableObject {
 
     private func handle(action: String) {
         if action == UNNotificationDefaultActionIdentifier || action == MoodReminder.openAction {
+            // Некому раскрывать — тоже новость: значит модель не подключила
+            // себя к напоминателю, и нажатие пропало здесь, а не в панели.
+            Log.info("напоминания: нажатие на уведомление — раскрываю панель"
+                     + (onOpenPanel == nil ? " (некому: обработчик не подключён)" : ""))
             onOpenPanel?()
             return
         }
-        guard action.hasPrefix(MoodReminder.markPrefix) else { return }   // «закрыть» — тоже ответ
+        guard action.hasPrefix(MoodReminder.markPrefix) else {
+            Log.info("напоминания: уведомление закрыто без ответа (\(action))")
+            return
+        }
         let raw = String(action.dropFirst(MoodReminder.markPrefix.count))
         guard let kind = MoodKind(rawValue: raw) else { return }
+        // Что именно отметили, в журнал не идёт — как и везде.
+        Log.info("напоминания: быстрый ответ прямо из уведомления")
         onMark?(kind)
     }
 }
@@ -405,6 +414,10 @@ extension MoodReminder: UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let action = response.actionIdentifier
+        // Записывается до всего остального и в самом обработчике: «нажал,
+        // и ничего не произошло» иначе не отличить от «нажатие не дошло»,
+        // а это разные поломки и чинятся они в разных местах.
+        Log.info("напоминания: ответ на уведомление получен")
         Task { @MainActor in self.handle(action: action) }
         completionHandler()
     }
@@ -418,15 +431,52 @@ extension MoodReminder: UNUserNotificationCenterDelegate {
 /// здесь нет намеренно: если однажды кнопка перестанет находиться, приложение
 /// не упадёт — уведомление просто останется уведомлением.
 enum MenuBarPanel {
+    /// - Parameter activating: выводить ли приложение вперёд перед нажатием.
+    ///   Выключается только зондом, который меряет, что без этого происходит.
     @MainActor
     @discardableResult
-    static func open() -> Bool {
+    static func open(activating: Bool = true) -> Bool {
+        guard let button = statusButton() else { return false }
+        // Приложение живёт в меню-баре и в момент нажатия на уведомление
+        // неактивно: система баннер показала, но вперёд accessory-приложение
+        // не выводит. Панель `MenuBarExtra` — окно, которое закрывается,
+        // едва приложение теряет фокус, поэтому без активации оно открывалось
+        // и схлопывалось в ту же секунду. Со стороны это выглядело ровно как
+        // «нажал на уведомление, ничего не произошло».
+        //
+        // Политику активации не трогаем: `.regular` завёл бы значок в доке
+        // у приложения, которого в доке быть не должно.
+        if activating { NSApp.activate(ignoringOtherApps: true) }
+        button.performClick(nil)
+        return true
+    }
+
+    @MainActor
+    static func statusButton() -> NSStatusBarButton? {
         for window in NSApp.windows {
-            guard let button = statusButton(in: window.contentView) else { continue }
-            button.performClick(nil)
-            return true
+            if let button = statusButton(in: window.contentView) { return button }
         }
-        return false
+        return nil
+    }
+
+    /// Видно ли окно панели прямо сейчас.
+    ///
+    /// Спрашиваем у AppKit, а не у модели: `onAppear` у SwiftUI приходит
+    /// с задержкой, а по этому ответу решается, нажимать ли второй раз, —
+    /// и повторное нажатие по уже открытой панели её закроет.
+    ///
+    /// Окно опознаётся тремя открытыми признаками, без единого приватного
+    /// имени класса: у панели нет заголовка (в отличие от окна настроек),
+    /// внутри неё нет кнопки строки меню (в отличие от окна самого пункта),
+    /// и она заметного размера.
+    @MainActor
+    static var isOpen: Bool {
+        NSApp.windows.contains { window in
+            window.isVisible
+            && window.title.isEmpty
+            && statusButton(in: window.contentView) == nil
+            && window.frame.width > 200
+        }
     }
 
     @MainActor

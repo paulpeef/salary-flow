@@ -33,6 +33,9 @@ swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.b
   Tools/RenderPreview/main.swift \
   -o .build/RenderPreview
 
+# Значок строки меню лежит в бандле, а у превью бандла нет — показываем путь
+# к исходнику, иначе на месте капли будет системный символ.
 SALARYFLOW_LOG_DIR="$(mktemp -d)/logs" SALARYFLOW_SETTINGS="$(mktemp -d)/preview-settings.json" \
 SALARYFLOW_MOOD="$(mktemp -d)/preview-mood.json" \
+SALARYFLOW_MENUBAR_ICON="$PWD/Resources/MenuBarIcon@2x.png" \
 .build/RenderPreview "$OUT"

@@ -21,10 +21,13 @@ final class AppModel: ObservableObject {
             if settings.country != oldValue.country {
                 holidays.setCountry(settings.country)
             }
-            // Разрешение спрашиваем в момент включения тумблера, а не при
-            // запуске: системный вопрос понятен только тогда, когда человек
-            // сам только что попросил напоминать.
-            if remindersWanted, !oldValue.moodEnabled || !oldValue.moodRemindersEnabled {
+            // Разрешение спрашиваем в момент, когда человек сам попросил
+            // напоминать уведомлением, а не при запуске: системный вопрос
+            // понятен только сразу после такой просьбы. Смена способа
+            // на «уведомлением» — такая же просьба, как и включение тумблера.
+            let wasByNotification = oldValue.moodEnabled && oldValue.moodRemindersEnabled
+                && oldValue.moodReminderStyle == .notification
+            if remindByNotification, !wasByNotification {
                 reminders.requestAccessIfNeeded()
             }
             refresh()
@@ -135,7 +138,7 @@ final class AppModel: ObservableObject {
 
         reminders.onOpenPanel = { [weak self] in self?.openPanel() }
         reminders.onMark = { [weak self] kind in self?.toggleMood(kind) }
-        if remindersWanted { reminders.requestAccessIfNeeded() }
+        if remindByNotification { reminders.requestAccessIfNeeded() }
 
         // Проверка уведомлений из терминала: доставку иначе не проверить ничем,
         // кроме нажатия кнопки руками, — а уведомления держит система, и её
@@ -208,6 +211,25 @@ final class AppModel: ObservableObject {
     /// чего в панели нет, было бы издевательством.
     var remindersWanted: Bool { settings.moodEnabled && settings.moodRemindersEnabled }
 
+    /// Напоминать уведомлением. Иначе приложение раскрывает панель само,
+    /// и системе уведомлений в этом деле нечего делать вовсе: ни разрешения,
+    /// ни сроков у неё не остаётся.
+    var remindByNotification: Bool {
+        remindersWanted && settings.moodReminderStyle == .notification
+    }
+
+    /// Сроки, в последний раз отданные системе уведомлений. `nil` — за этот
+    /// сеанс не отдавали ещё ничего.
+    private var scheduledMoments: [Date]?
+
+    /// Ближайший срок, которого ждёт режим «раскрывать панель».
+    ///
+    /// Держится отдельно от плана, потому что план хранит только будущее:
+    /// наступивший срок из него исчезает, и по нему уже не понять, что момент
+    /// пришёл. Живёт в памяти — при перезапуске потеряется, но опоздание всё
+    /// равно ограничено пятью минутами.
+    private var pendingPanelReminder: Date?
+
     /// Ближайшие напоминания. Публичные и наблюдаемые, потому что их показывают
     /// и в настройках, и в панели: приложение само выбрало время, и это не
     /// должно быть тайной — иначе первое же уведомление станет неожиданностью.
@@ -251,19 +273,108 @@ final class AppModel: ObservableObject {
             )
         }
 
-        guard plan != plannedReminders else { return }
-        plannedReminders = plan
-        reminders.schedule(plan, calendar: settings.calendar)
+        if plan != plannedReminders {
+            plannedReminders = plan
+            // Будущий срок пропал из плана — например, человек только что
+            // отметился, и ближайшее напоминание стало лишним. Ждать его
+            // больше незачем. Наступившие сроки при этом не трогаем: их
+            // в плане нет никогда, и отменёнными их считать нельзя.
+            if let pending = pendingPanelReminder, pending > now, !plan.contains(pending) {
+                pendingPanelReminder = nil
+            }
+        }
+
+        // В режиме «раскрывать панель» системе сроков не отдаём вовсе: иначе
+        // к раскрытой панели прилетал бы ещё и баннер про то же самое.
+        //
+        // Сравниваем с тем, что отдано системе, а не с планом. Способ
+        // напоминания меняется при неизменном плане — и на сравнении планов
+        // переключение на панель оставило бы уже поставленные сроки в силе:
+        // человек просил не присылать пуши, а они продолжали бы приходить.
+        // Первый раз за сеанс отдаём всегда: сроки могли остаться от прошлого.
+        let forSystem = remindByNotification ? plan : []
+        guard forSystem != scheduledMoments else { return }
+        scheduledMoments = forSystem
+        reminders.schedule(forSystem, calendar: settings.calendar)
     }
 
-    /// Раскрыть панель — по нажатию на напоминание.
+    /// Ход времени в режиме «раскрывать панель»: зовётся с каждым тиком.
+    ///
+    /// Отдельного таймера нет намеренно — модель и так тикает раз в секунду-две
+    /// внутри смены, а напоминания стоят как раз внутри неё. Второй таймер
+    /// пришлось бы отдельно заводить, гасить и переставлять при каждой правке
+    /// настроек, и он был бы ещё одним местом, где расписание может разойтись
+    /// с планом.
+    private func advancePanelReminder() {
+        guard remindersWanted, settings.moodReminderStyle == .panel else {
+            pendingPanelReminder = nil
+            return
+        }
+        let now = frozenNow ?? Date()
+
+        switch PanelReminderRules.verdict(now: now, due: pendingPanelReminder) {
+        case .wait:
+            break
+        case .open:
+            pendingPanelReminder = nil
+            if amountsHidden {
+                // Идёт звонок или запись экрана. Панель, выскочившая посреди
+                // демонстрации, — ровно то, от чего защищает приватный режим,
+                // и «хочу уволиться» на общем экране дороже пропущенного
+                // напоминания.
+                Log.info("напоминание: суммы скрыты — панель не раскрываю")
+            } else {
+                Log.info("напоминание: время подошло — раскрываю панель")
+                openPanel()
+            }
+        case .skip:
+            // Компьютер спал, или человек был в другом приложении во весь
+            // экран. Догонять поздно: вопрос про «сейчас», а «сейчас» уже другое.
+            Log.info("напоминание: срок пропущен, панель не раскрываю")
+            pendingPanelReminder = nil
+        }
+
+        if pendingPanelReminder == nil {
+            pendingPanelReminder = PanelReminderRules.next(after: now, in: plannedReminders)
+        }
+    }
+
+    /// Раскрыть панель — по нажатию на напоминание или вместо него.
+    ///
+    /// Нажатие может прийти не с баннера, а из Центра уведомлений — из списка,
+    /// куда напоминание легло, пока человека не было. Тогда в момент вызова
+    /// Центр ещё на экране и держит фокус: панель раскрывается под ним и
+    /// схлопывается вместе с его закрытием, а со стороны это выглядит как
+    /// «нажал, и ничего не произошло» (замечено владельцем 2026-08-17:
+    /// с баннера панель раскрывалась, из списка — нет). Поэтому ждём, пока
+    /// Центр уедет, и проверяем результат, а не надеемся на него.
     private func openPanel() {
-        guard !panelIsOpen else { return }
-        if !MenuBarPanel.open() {
-            // Пункт меню-бара мог быть спрятан приватным режимом: идёт звонок,
-            // и раскрывать панель с суммами поверх демонстрации экрана — ровно
-            // то, от чего этот режим и защищает.
-            Log.warn("напоминание: панель раскрыть не удалось — пункт меню-бара недоступен")
+        guard !MenuBarPanel.isOpen else {
+            Log.info("напоминание: панель уже открыта")
+            return
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard MenuBarPanel.open() else {
+                // Пункт меню-бара мог быть спрятан приватным режимом: идёт
+                // звонок, и раскрывать панель с суммами поверх демонстрации
+                // экрана — ровно то, от чего этот режим и защищает.
+                Log.warn("напоминание: панель раскрыть не удалось — пункт меню-бара недоступен")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+
+            if !MenuBarPanel.isOpen {
+                // Центр уведомлений мог закрываться дольше обычного. Второе
+                // нажатие безопасно ровно потому, что мы спросили AppKit,
+                // а не модель: по уже открытой панели оно бы её закрыло.
+                Log.info("напоминание: панель не раскрылась с первого раза, повторяю")
+                MenuBarPanel.open()
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            Log.info(MenuBarPanel.isOpen
+                     ? "напоминание: панель раскрыта"
+                     : "напоминание: панель раскрыть не удалось, нажатие прошло впустую")
         }
     }
 
@@ -427,6 +538,7 @@ final class AppModel: ObservableObject {
         if remindersPlannedFor != DayStamp(snapshot.now, in: settings.calendar) {
             rescheduleReminders()
         }
+        advancePanelReminder()
         if desiredInterval() != currentInterval { rescheduleTimer() }
     }
 }
