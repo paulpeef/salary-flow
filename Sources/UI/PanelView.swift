@@ -132,7 +132,10 @@ struct PanelView: View {
                full: s.todayFull,
                progress: s.dayProgress,
                hint: dayHint(s),
-               tint: s.state == .working ? .accentColor : .secondary)
+               // Зелёная, пока день идёт, и приглушённая, когда кончился:
+               // цвет теперь отвечает за «капает или нет», а не за то,
+               // день это или месяц.
+               tint: s.state == .working ? .green : .secondary)
     }
 
     private func month(_ s: Snapshot) -> Totals {
@@ -145,6 +148,9 @@ struct PanelView: View {
                       // Не «43% месяца»: непонятно, процент времени это или
                       // денег. Дни отвечают на тот же вопрос без двусмысленности.
                       hint: "Оплачено дней: \(s.paidDaysDone) из \(s.paidDaysTotal)",
+                      // Тот же цвет, что и у дневной полосы. Разные цвета
+                      // у двух одинаковых по смыслу индикаторов — обещание
+                      // разницы, которой нет: это одна мысль в двух масштабах.
                       tint: .green)
     }
 
@@ -157,12 +163,20 @@ struct PanelView: View {
                 .textCase(.uppercase)
                 .lineLimit(1)
 
+            // Цветом текста, а не зелёным (жалоба владельца 2026-08-17: «нечитаемо»).
+            // Подложка панели полупрозрачная, и системный зелёный на светлых
+            // обоях теряет контраст ровно там, где его нужно больше всего —
+            // на 28 точках полужирного. Это была самая плохо читаемая строка
+            // в приложении, и зелёной она стояла с первой версии.
+            //
+            // Цвет из цифры никуда не делся, он переехал на полосу под ней:
+            // на сплошной заливке контраст не важен, а «деньги идут» читается
+            // с той же секунды.
             Text(model.amountsHidden ? "••• •••" : money.string(t.earned))
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-                .foregroundStyle(Color.green)
                 .contentTransition(.numericText())
 
             ProgressBar(value: t.progress, tint: t.tint)

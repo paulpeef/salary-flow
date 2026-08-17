@@ -39,16 +39,21 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
 /// настраивают один раз при установке, и то, что трогают время от времени,
 /// так что боковой список сам становится картой.
 enum SettingsGroup: Int, CaseIterable, Identifiable {
-    case calculation, display, diary, program
+    case calculation, display, rest
 
     var id: Int { rawValue }
 
-    var title: String {
+    /// У последней группы заголовка нет намеренно. Прежде их было четыре,
+    /// и две последние состояли из одной строки каждая: «Дневник» над одним
+    /// «Настроением» и — совсем нелепо — «Программа» над «Приложением», то есть
+    /// слово над своим же синонимом. Заголовок, который не отличает одну строку
+    /// от другой, ничего не группирует; строки лучше читаются просто стоящими
+    /// вместе внизу.
+    var title: String? {
         switch self {
         case .calculation: return "Расчёт"
         case .display: return "Показ"
-        case .diary: return "Дневник"
-        case .program: return "Программа"
+        case .rest: return nil
         }
     }
 
@@ -56,8 +61,7 @@ enum SettingsGroup: Int, CaseIterable, Identifiable {
         switch self {
         case .calculation: return [.money, .schedule, .specialDays]
         case .display: return [.counter, .privacy]
-        case .diary: return [.mood]
-        case .program: return [.app]
+        case .rest: return [.mood, .app]
         }
     }
 }
@@ -82,12 +86,14 @@ struct SettingsView: View {
         HStack(spacing: 0) {
             List(selection: $model.settingsSection) {
                 ForEach(SettingsGroup.allCases) { group in
-                    Section(group.title) {
+                    Section {
                         ForEach(group.sections) { item in
                             Label(item.title, systemImage: item.symbol)
                                 .padding(.vertical, 2)
                                 .tag(item)
                         }
+                    } header: {
+                        if let title = group.title { Text(title) }
                     }
                 }
             }
