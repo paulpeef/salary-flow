@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
     case money, schedule, specialDays, counter, privacy, mood, app
@@ -553,6 +554,12 @@ private struct CounterTab: View {
 private struct AppTab: View {
     @ObservedObject var model: AppModel
 
+    /// Что показано поверх настроек: подтверждение импорта, итог или отказ.
+    ///
+    /// Один источник истины вместо трёх независимых `.alert`: два алерта,
+    /// висящие на одном представлении, SwiftUI показывает через раз.
+    @State private var dialog: BackupDialog?
+
     var body: some View {
         Form {
             Section {
@@ -570,6 +577,22 @@ private struct AppTab: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            }
+
+            // Выше обновлений намеренно: обновления идут сами, а переезд —
+            // то, ради чего сюда приходят руками.
+            Section {
+                LabeledContent("Копия") {
+                    HStack {
+                        Button("Сохранить копию…") { exportBackup() }
+                        Button("Загрузить копию…") { importBackup() }
+                    }
+                }
+            } header: {
+                Text("Перенос на другой компьютер")
+            } footer: {
+                Text("Один файл, в котором лежат все настройки и вся история настроения. Сохраните его перед переездом, поставьте Salary Flow на новой машине и загрузите — счётчик и дневник продолжат с того же места. В папки заходить не придётся. Копия никуда не отправляется и учётной записи не требует: это обычный файл, и он остаётся у вас.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section {
@@ -623,6 +646,133 @@ private struct AppTab: View {
             }
         }
         .formStyle(.grouped)
+        .alert(dialog?.title ?? "", isPresented: Binding(
+            get: { dialog != nil },
+            set: { if !$0 { dialog = nil } }
+        ), presenting: dialog) { dialog in
+            buttons(for: dialog)
+        } message: { dialog in
+            Text(message(for: dialog))
+        }
+    }
+
+    // MARK: Копия
+
+    private func exportBackup() {
+        let panel = NSSavePanel()
+        panel.title = "Сохранить копию"
+        panel.nameFieldStringValue = Backup.suggestedFileName()
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try model.writeBackup(to: url)
+        } catch {
+            dialog = .failed(title: "Копия не сохранилась",
+                             text: "Не удалось записать файл: \(error.localizedDescription)")
+        }
+    }
+
+    /// Загрузка идёт в два шага: сначала показываем, что внутри, и только
+    /// потом ввозим. Данные, которые копятся месяцами, не должны затираться
+    /// одним нажатием на файл, выбранный наугад.
+    private func importBackup() {
+        let panel = NSOpenPanel()
+        panel.title = "Загрузить копию"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            dialog = .confirm(try Backup.decode(try Data(contentsOf: url)))
+        } catch let error as BackupError {
+            dialog = .failed(title: "Копия не загрузилась", text: error.message)
+        } catch {
+            dialog = .failed(title: "Копия не загрузилась",
+                             text: "Файл не читается: \(error.localizedDescription)")
+        }
+    }
+
+    private func apply(_ file: BackupFile, _ mode: Backup.Mode) {
+        let result = model.importBackup(file, mode: mode)
+        // Второй алерт заводится не сразу: пока первый закрывается, SwiftUI
+        // сбросит `dialog` в nil своей же рукой и заодно съест новое значение.
+        DispatchQueue.main.async { dialog = .done(result) }
+    }
+
+    @ViewBuilder
+    private func buttons(for dialog: BackupDialog) -> some View {
+        switch dialog {
+        case .confirm(let file):
+            Button("Заменить") { apply(file, .replace) }
+            // Объединять есть что только когда истории две.
+            if !model.mood.entries.isEmpty, (file.mood?.entries.isEmpty == false) {
+                Button("Добавить отметки") { apply(file, .mergeMarks) }
+            }
+            Button("Отмена", role: .cancel) {}
+        case .done(let result):
+            if case .written(let copy) = result.safetyCopy {
+                Button("Показать прежнее") {
+                    NSWorkspace.shared.activateFileViewerSelecting([copy])
+                }
+            }
+            Button("Хорошо", role: .cancel) {}
+        case .failed:
+            Button("Понятно", role: .cancel) {}
+        }
+    }
+
+    private func message(for dialog: BackupDialog) -> String {
+        switch dialog {
+        case .confirm(let file):
+            var text = file.summary.text + "\n\n"
+            text += "«Заменить» — нынешние настройки и история уступят место копии. "
+            text += "Прежнее состояние сложим отдельным файлом рядом с настройками, "
+            text += "так что вернуться будет чем."
+            if !model.mood.entries.isEmpty, file.mood?.entries.isEmpty == false {
+                text += "\n«Добавить отметки» — настройки всё равно заменятся, "
+                text += "а две истории настроения сложатся в одну без повторов."
+            }
+            return text
+
+        case .done(let result):
+            var lines: [String] = []
+            if result.settingsReplaced { lines.append("Настройки заменены.") }
+            switch result.mode {
+            case .replace:
+                lines.append("Отметок было \(result.marksBefore), стало \(result.marksAfter).")
+            case .mergeMarks:
+                lines.append(result.added > 0
+                    ? "Добавилось \(Fmt.marks(result.added)), всего стало \(result.marksAfter)."
+                    : "Новых отметок в копии не нашлось — всё это уже было.")
+            }
+            switch result.safetyCopy {
+            case .written(let copy):
+                lines.append("Прежнее состояние лежит в файле \(copy.lastPathComponent) рядом с настройками.")
+            case .notNeeded:
+                break
+            case .failed:
+                lines.append("Прежнее состояние сохранить не удалось — подробности в журнале.")
+            }
+            return lines.joined(separator: "\n")
+
+        case .failed(_, let text):
+            return text
+        }
+    }
+}
+
+/// Окно поверх настроек: подтверждение, итог или отказ.
+private enum BackupDialog {
+    case confirm(BackupFile)
+    case done(Backup.Result)
+    case failed(title: String, text: String)
+
+    var title: String {
+        switch self {
+        case .confirm: return "Загрузить копию?"
+        case .done: return "Копия загружена"
+        case .failed(let title, _): return title
+        }
     }
 }
 

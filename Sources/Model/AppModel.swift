@@ -267,6 +267,98 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Копия для переезда
+
+    /// Всё состояние одним файлом: настройки и история отметок.
+    func backupData(at date: Date = Date()) throws -> Data {
+        let file = Backup.make(settings: settings,
+                               entries: mood.entries,
+                               appVersion: updater.currentVersion,
+                               machine: Host.current().localizedName,
+                               at: date)
+        return try Backup.encode(file)
+    }
+
+    func writeBackup(to url: URL) throws {
+        try backupData().write(to: url, options: .atomic)
+        // Куда именно человек её сохранил — его дело, в журнал идёт только имя.
+        Log.info("копия сохранена в \(url.lastPathComponent): отметок \(mood.entries.count)")
+    }
+
+    /// Прежнее состояние, сложенное рядом с настройками перед импортом.
+    ///
+    /// Промах кнопкой не должен быть необратимым: у человека может не быть
+    /// копии того, что он сейчас затрёт, — а после этого шага она есть всегда
+    /// и ввозится обратно тем же импортом.
+    private func writeSafetyCopy(at date: Date = Date()) -> Backup.SafetyCopy {
+        // Главный случай этой кнопки — свежая установка на новой машине.
+        // Там терять нечего, и файл «до импорта» с пустотой внутри был бы
+        // ровно тем мусором в папке, от которого вся затея и избавляет.
+        guard !mood.entries.isEmpty || settings != AppSettings() else {
+            Log.info("страховка перед импортом не понадобилась: настройки нетронуты, отметок нет")
+            return .notNeeded
+        }
+
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd-HHmm"
+        let url = SettingsStore.fileURL.deletingLastPathComponent()
+            .appendingPathComponent("salaryflow-before-import-\(f.string(from: date)).json")
+        do {
+            try backupData(at: date).write(to: url, options: .atomic)
+            return .written(url)
+        } catch {
+            Log.error("не удалось сложить прежнее состояние перед импортом: \(error)")
+            return .failed
+        }
+    }
+
+    /// Ввозит копию и отдаёт итог для сообщения «готово».
+    ///
+    /// Порядок не случаен: сначала страховка, потом история, потом настройки.
+    /// Настройки идут последними, потому что их присвоение тянет за собой
+    /// пересчёт всего — включая план напоминаний, который считается по свежим
+    /// отметкам и должен видеть уже ввезённую историю.
+    @discardableResult
+    func importBackup(_ file: BackupFile, mode: Backup.Mode) -> Backup.Result {
+        let before = mood.entries.count
+        let safety = writeSafetyCopy()
+
+        var added = 0
+        if let incoming = file.mood?.entries {
+            switch mode {
+            case .replace:
+                // Заменили целиком — «прибавилось» тут ничего не значит,
+                // итог виден по числу отметок.
+                mood.replace(with: incoming)
+            case .mergeMarks:
+                let merged = Backup.merged(existing: mood.entries, incoming: incoming)
+                added = merged.added
+                mood.replace(with: merged.entries)
+            }
+        }
+
+        var settingsReplaced = false
+        if let incoming = file.settings {
+            // Тем же путём, что и файл с диска: копию могла снять сборка
+            // прежнего формата, и её надо дописать до текущего.
+            settings = SettingsStore.upgraded(incoming)
+            settingsReplaced = true
+        }
+        // Настройки могли и не измениться — например, копия с этой же машины.
+        // Тогда `didSet` промолчит, а план напоминаний пересобрать всё равно
+        // нужно: отметки стали другими.
+        rescheduleReminders()
+
+        Log.info("копия ввезена: настройки \(settingsReplaced ? "заменены" : "не менялись"), отметок было \(before), стало \(mood.entries.count)")
+        return Backup.Result(mode: mode,
+                             settingsReplaced: settingsReplaced,
+                             marksBefore: before,
+                             marksAfter: mood.entries.count,
+                             added: added,
+                             safetyCopy: safety)
+    }
+
     /// Как выглядит конкретный день по текущим настройкам и календарю.
     /// Календарю нужен тот же расчёт, что и счётчику, — чтобы сетка
     /// не разошлась с деньгами.

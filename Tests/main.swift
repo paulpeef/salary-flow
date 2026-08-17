@@ -1192,6 +1192,175 @@ do {
               .contains("Notifications are not allowed"))
 }
 
+// MARK: - Копия для переезда
+
+do {
+    var settings = baseSettings()
+    settings.monthlyAmount = 333_000
+    settings.currencyCode = "MYR"
+    settings.country = .malaysia
+    settings.launchAtLogin = true
+    settings.ranges = [DayRange(from: DayStamp(year: 2026, month: 7, day: 1),
+                                to: DayStamp(year: 2026, month: 7, day: 14),
+                                kind: .vacation)]
+    let entries = [moodEntry(.tired, 2026, 8, 10, 17, 0),
+                   moodEntry(.good, 2026, 8, 11, 12, 0),
+                   moodEntry(.flow, 2026, 8, 12, 11, 30)]
+
+    let file = Backup.make(settings: settings, entries: entries,
+                           appVersion: "1.10", machine: "MacBook",
+                           at: moment(2026, 8, 17, 14, 32))
+    let restored = try! Backup.decode(try! Backup.encode(file))
+
+    check("настройки переживают круг «выгрузил — загрузил» целиком",
+          restored.settings == settings)
+    check("отпуска в копии не теряются", restored.settings?.ranges.count == 1)
+    check("история в копии не теряется", restored.mood?.entries.count == 3)
+    check("состояния не путаются", restored.mood?.entries.map(\.kind) == [.tired, .good, .flow])
+    check("идентификаторы отметок сохраняются — по ним ловятся дубли",
+          restored.mood?.entries.map(\.id) == entries.map(\.id))
+    check("в копии видно, чем и когда её сняли",
+          restored.appVersion == "1.10" && restored.machine == "MacBook"
+          && restored.exportedAt == moment(2026, 8, 17, 14, 32))
+
+    let summary = restored.summary
+    check("опись копии считает отметки", summary.entryCount == 3)
+    check("опись копии знает период",
+          summary.firstDay == DayStamp(year: 2026, month: 8, day: 10)
+          && summary.lastDay == DayStamp(year: 2026, month: 8, day: 12))
+    check("опись копии видит настройки", summary.hasSettings)
+    // Окно подтверждения открывают и при включённом приватном режиме —
+    // сумм в нём быть не должно.
+    check("в описи копии нет сумм", !summary.text.contains("333"))
+
+    // Сборка вне бандла номера версии не знает — в опись это должно попадать
+    // словом, а не вопросительным знаком посреди фразы.
+    let noVersion = Backup.make(settings: settings, entries: [], appVersion: "?",
+                                machine: nil, at: moment(2026, 8, 17, 14, 32))
+    check("неизвестная версия в описи названа словом",
+          noVersion.summary.text.contains("версией неизвестной")
+          && !noVersion.summary.text.contains("?"))
+    check("опись пустой истории не выдумывает отметок",
+          noVersion.summary.text.contains("история настроения пустая"))
+
+    check("имя файла копии несёт дату",
+          Backup.suggestedFileName(at: moment(2026, 8, 17, 14, 32)) == "salaryflow-2026-08-17.json")
+}
+
+// MARK: - Копия: что отвергается
+
+func backupError(_ text: String) -> BackupError? {
+    do {
+        _ = try Backup.decode(Data(text.utf8))
+        return nil
+    } catch let error as BackupError {
+        return error
+    } catch {
+        return nil
+    }
+}
+
+do {
+    check("не JSON отвергается", backupError("это вообще не файл") == .unreadable)
+    check("JSON не той формы отвергается", backupError("[1,2,3]") == .unreadable)
+    check("чужой JSON отвергается",
+          backupError(#"{"format":1,"app":"SomethingElse","settings":{}}"#) == .foreign)
+    check("копия из будущего отвергается с понятной причиной",
+          backupError(#"{"format":9,"app":"SalaryFlow","settings":{}}"#) == .tooNew(9))
+    check("копия без обеих секций отвергается",
+          backupError(#"{"format":1,"app":"SalaryFlow"}"#) == .empty)
+    // Срезанный номер формата — не повод отказывать файлу с настоящими данными.
+    check("копия без номера формата читается как текущая",
+          backupError(#"{"app":"SalaryFlow","settings":{"monthlyAmount":1}}"#) == nil)
+    check("причина отказа объясняет, что делать",
+          BackupError.tooNew(9).message.contains("Обновите"))
+
+    // Копию можно править руками: испорченная секция должна терять себя,
+    // а не уносить с собой вторую.
+    let handEdited = """
+    {"format":1,"app":"SalaryFlow","appVersion":"1.9","exportedAt":"2026-08-17T10:00:00Z",
+     "settings":"тут был мусор",
+     "mood":{"version":1,"entries":[{"at":"2026-08-11T09:00:00Z","kind":"good"}]}}
+    """
+    let salvaged = try! Backup.decode(Data(handEdited.utf8))
+    check("испорченные настройки не уносят историю",
+          salvaged.settings == nil && salvaged.mood?.entries.count == 1)
+    check("опись честно говорит, что настроек в файле нет", !salvaged.summary.hasSettings)
+}
+
+// MARK: - Копия: старый формат настроек
+
+do {
+    // Копию могли снять сборкой полугодовой давности. Без дописывания её поля
+    // приехали бы в прежнем смысле — молча, без единого признака.
+    let old = """
+    {"format":1,"app":"SalaryFlow","appVersion":"1.5","exportedAt":"2026-02-01T10:00:00Z",
+     "settings":{"schemaVersion":1,"monthlyAmount":100000,"decimals":2,"moodEnabled":false}}
+    """
+    let file = try! Backup.decode(Data(old.utf8))
+    let upgraded = SettingsStore.upgraded(file.settings!)
+    check("копия прежнего формата дописывается до текущего",
+          upgraded.schemaVersion == AppSettings.currentSchemaVersion)
+    check("правило перевода применяется и к ввезённой копии", upgraded.decimals == 0)
+    check("ввоз старой копии не теряет оклад", nearly(upgraded.monthlyAmount, 100_000))
+    check("ввоз старой копии не теряет выключенный опрос", !upgraded.moodEnabled)
+    check("настройки текущего формата дописывание не трогает",
+          SettingsStore.upgraded(baseSettings()) == baseSettings())
+}
+
+// MARK: - Копия: объединение историй
+
+do {
+    let mine = [moodEntry(.tired, 2026, 8, 10, 17, 0), moodEntry(.good, 2026, 8, 11, 12, 0)]
+    let theirs = [moodEntry(.flow, 2026, 8, 12, 11, 30)]
+
+    let sameAgain = Backup.merged(existing: mine, incoming: mine)
+    check("объединение с самим собой ничего не добавляет",
+          sameAgain.added == 0 && sameAgain.entries.count == 2)
+
+    let grown = Backup.merged(existing: mine, incoming: theirs + mine)
+    check("объединение добавляет только новое", grown.added == 1 && grown.entries.count == 3)
+    check("объединённая история лежит по возрастанию времени",
+          grown.entries.map(\.at) == grown.entries.map(\.at).sorted())
+
+    // Файл правили руками или пересобирали: id разошлись, а отметка та же.
+    var reissued = mine[0]
+    reissued.id = UUID()
+    check("дубль с другим id ловится по моменту и состоянию",
+          Backup.merged(existing: mine, incoming: [reissued]).added == 0)
+
+    // «Устал» и «злюсь» в одну минуту — это два ответа, а не повтор одного.
+    var otherKind = mine[0]
+    otherKind.id = UUID()
+    otherKind.kind = .angry
+    check("другое состояние в тот же момент дублем не считается",
+          Backup.merged(existing: mine, incoming: [otherKind]).added == 1)
+
+    check("объединение с пустой историей отдаёт вторую целиком",
+          Backup.merged(existing: [], incoming: mine).entries.count == 2)
+
+    // Две полные истории — единственный способ перевалить за предел разом.
+    let base = moment(2020, 1, 1, 12, 0)
+    func bulk(_ count: Int, from start: Int) -> [MoodEntry] {
+        (0..<count).map { i in
+            let at = base.addingTimeInterval(Double((start + i) * 60))
+            return MoodEntry(at: at, kind: .good, day: DayStamp(at, in: moodCalendar),
+                             minuteOfDay: 0, weekday: 1, phase: .working)
+        }
+    }
+    let overflow = Backup.merged(existing: bulk(MoodRules.maxEntries, from: 0),
+                                 incoming: bulk(10, from: MoodRules.maxEntries))
+    check("объединение не выходит за предел журнала",
+          overflow.entries.count == MoodRules.maxEntries,
+          "получено \(overflow.entries.count)")
+    check("при переполнении уходят самые старые отметки",
+          overflow.entries.first?.at == base.addingTimeInterval(600))
+
+    check("перемешанная история выправляется по времени",
+          MoodRules.normalized([theirs[0], mine[1], mine[0]]).map(\.at)
+              == [mine[0], mine[1], theirs[0]].map(\.at))
+}
+
 // MARK: - Итог
 
 if failures.isEmpty {

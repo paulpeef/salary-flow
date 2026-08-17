@@ -450,26 +450,34 @@ final class SettingsStore: ObservableObject {
             save()   // первый запуск: файл должно быть видно и можно править руками
         } else {
             SettingsStore.refreshBackup()
-            if settings.schemaVersion != AppSettings.currentSchemaVersion {
-                // Файл от прежней версии дописываем до текущего формата,
-                // сохранив всё, что в нём было.
-                Log.info("файл настроек обновлён с версии \(settings.schemaVersion) до \(AppSettings.currentSchemaVersion)")
-                var upgraded = settings
-                if upgraded.schemaVersion < 2, upgraded.decimals != 0 {
-                    // Копейки стали выключены по умолчанию — переводим и тех,
-                    // у кого они остались от прежней версии.
-                    upgraded.decimals = 0
-                    Log.info("копейки на счётчике выключены (их можно вернуть в разделе «Счётчик»)")
-                }
-                if upgraded.schemaVersion < 3 {
-                    // Сам перевод сделан при разборе — здесь только след в журнале,
-                    // чтобы по нему было видно, откуда взялось новое значение.
-                    Log.info("счётчик в меню-баре: показывает \(upgraded.menuBarTotal.title.lowercased()), вне рабочего дня сумма \(upgraded.idleShowsAmount ? "остаётся" : "убирается")")
-                }
-                upgraded.schemaVersion = AppSettings.currentSchemaVersion
-                settings = upgraded
-            }
+            settings = SettingsStore.upgraded(settings)
         }
+    }
+
+    /// Дописывает настройки прежней версии формата до текущей, сохранив всё,
+    /// что в них было.
+    ///
+    /// Отдельная чистая функция, а не кусок `init`, потому что тем же путём
+    /// должна проходить копия, приехавшая с другой машины: она могла быть
+    /// снята сборкой полугодовой давности, и без этого шага её поля остались
+    /// бы в старом смысле — молча, без единого признака.
+    static func upgraded(_ settings: AppSettings) -> AppSettings {
+        guard settings.schemaVersion != AppSettings.currentSchemaVersion else { return settings }
+        Log.info("настройки дописаны с версии формата \(settings.schemaVersion) до \(AppSettings.currentSchemaVersion)")
+        var upgraded = settings
+        if upgraded.schemaVersion < 2, upgraded.decimals != 0 {
+            // Копейки стали выключены по умолчанию — переводим и тех,
+            // у кого они остались от прежней версии.
+            upgraded.decimals = 0
+            Log.info("копейки на счётчике выключены (их можно вернуть в разделе «Счётчик»)")
+        }
+        if upgraded.schemaVersion < 3 {
+            // Сам перевод сделан при разборе — здесь только след в журнале,
+            // чтобы по нему было видно, откуда взялось новое значение.
+            Log.info("счётчик в меню-баре: показывает \(upgraded.menuBarTotal.title.lowercased()), вне рабочего дня сумма \(upgraded.idleShowsAmount ? "остаётся" : "убирается")")
+        }
+        upgraded.schemaVersion = AppSettings.currentSchemaVersion
+        return upgraded
     }
 
     private static func decode(_ url: URL) throws -> AppSettings {

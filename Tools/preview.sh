@@ -14,7 +14,7 @@ swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.b
   Sources/Model/Settings.swift \
   Sources/Model/Engine.swift \
   Sources/Model/Holidays.swift Sources/Model/WorkCalendar.swift \
-  Sources/Model/Formatting.swift \
+  Sources/Model/Formatting.swift Sources/Model/Backup.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/Reminders.swift \
   Sources/Model/AppModel.swift \

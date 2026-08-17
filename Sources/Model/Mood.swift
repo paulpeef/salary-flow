@@ -343,6 +343,22 @@ enum MoodRules {
     /// в день это больше двадцати лет — предел стоит не ради экономии,
     /// а чтобы испорченный или размноженный файл не рос без границ.
     static let maxEntries = 20_000
+
+    /// Приводит историю к виду, в котором её ждёт всё остальное: по возрастанию
+    /// времени и не длиннее предела.
+    ///
+    /// Порядок здесь не косметика. `openForUndo` и `lastMark` идут с конца
+    /// и останавливаются на первой подходящей записи — на перемешанном списке
+    /// они молча врут. Пока история росла только через `append`, порядок
+    /// держался сам собой; с приходом импорта и объединения он стал тем,
+    /// что нужно восстанавливать явно.
+    static func normalized(_ entries: [MoodEntry]) -> [MoodEntry] {
+        var sorted = entries.sorted { $0.at < $1.at }
+        if sorted.count > maxEntries {
+            sorted.removeFirst(sorted.count - maxEntries)
+        }
+        return sorted
+    }
 }
 
 // MARK: - Хранилище
@@ -396,6 +412,17 @@ final class MoodLog: ObservableObject {
         guard !entries.isEmpty else { return }
         Log.info("история настроения удалена по кнопке в настройках (\(entries.count) отметок)")
         entries = []
+        save()
+    }
+
+    /// Заменить журнал целиком — этим пользуется импорт копии.
+    /// Порядок восстанавливается здесь, а не доверяется файлу: копию могли
+    /// править руками.
+    func replace(with newEntries: [MoodEntry]) {
+        let normalized = MoodRules.normalized(newEntries)
+        // Сколько отметок стало — не тайна, а вот какие они, в журнал не идёт.
+        Log.info("журнал настроения заменён: было \(entries.count) отметок, стало \(normalized.count)")
+        entries = normalized
         save()
     }
 
@@ -475,7 +502,11 @@ final class MoodLog: ObservableObject {
 
 /// Обёртка файла. Разбирает массив поэлементно, чтобы одна испорченная
 /// запись не уносила с собой все остальные.
-private struct MoodFile: Codable {
+///
+/// Не приватная, потому что ровно эта обёртка вкладывается в копию для
+/// переезда (`BackupFile`): формат истории там один и тот же, и второго
+/// описания того же самого быть не должно.
+struct MoodFile: Codable {
     var version = 1
     var entries: [MoodEntry]
     var skipped = 0

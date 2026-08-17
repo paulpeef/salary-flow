@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="SalaryFlow"
 BUNDLE_ID="io.github.paulpeef.salaryflow"
-VERSION="${VERSION:-1.9}"
+VERSION="${VERSION:-1.10}"
 FEED_URL="https://raw.githubusercontent.com/paulpeef/salary-flow/main/appcast.xml"
 # Публичный ключ проверки обновлений. Приватный лежит в связке ключей
 # разработчика и в секретах репозитория — сюда он не попадает никогда.
@@ -44,7 +44,7 @@ swiftc -parse-as-library -O \
   Sources/Model/Settings.swift \
   Sources/Model/Engine.swift \
   Sources/Model/Holidays.swift Sources/Model/WorkCalendar.swift \
-  Sources/Model/Formatting.swift \
+  Sources/Model/Formatting.swift Sources/Model/Backup.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/Reminders.swift \
   Sources/Model/AppModel.swift \
