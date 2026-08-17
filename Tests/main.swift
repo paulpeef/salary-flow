@@ -1128,6 +1128,70 @@ do {
     check("горизонт планирования — неделя", MoodReminderRules.horizonDays == 7)
 }
 
+// MARK: - Напоминания: вердикт о разрешении
+
+do {
+    func facts(_ authorization: ReminderSettingsFacts.Authorization,
+               alerts: Bool = true, center: Bool = true) -> ReminderSettingsFacts {
+        ReminderSettingsFacts(authorization: authorization,
+                              alertsShown: alerts, keptInNotificationCenter: center)
+    }
+
+    check("не спрашивали — так и говорим",
+          ReminderAccessRules.verdict(facts(.notDetermined)) == .notAsked)
+    check("запрет системы — запрет",
+          ReminderAccessRules.verdict(facts(.denied)) == .denied)
+    check("разрешено с баннерами — всё хорошо",
+          ReminderAccessRules.verdict(facts(.authorized)) == .granted)
+
+    // Тот случай, из-за которого состояний пять: разрешение есть, а увидеть
+    // напоминание нельзя. Молчать об этом — обещать то, чего не будет.
+    check("разрешено, но баннеры выключены — отдельное состояние",
+          ReminderAccessRules.verdict(facts(.authorized, alerts: false)) == .silenced)
+    check("выключенный Центр сам по себе разрешения не отменяет",
+          ReminderAccessRules.verdict(facts(.authorized, center: false)) == .granted)
+
+    check("разрешение и молчание доставку допускают",
+          ReminderAccess.granted.allowsDelivery && ReminderAccess.silenced.allowsDelivery)
+    check("запрет, отсутствие бандла и неспрошенное — не допускают",
+          !ReminderAccess.denied.allowsDelivery
+          && !ReminderAccess.unavailable.allowsDelivery
+          && !ReminderAccess.notAsked.allowsDelivery)
+}
+
+// MARK: - Напоминания: итог проверки доставки
+
+do {
+    func verdict(access: ReminderAccess = .granted, keptInCenter: Bool = true,
+                 rejection: String? = nil, found: Bool = true) -> ReminderTest {
+        ReminderAccessRules.testVerdict(access: access, keptInCenter: keptInCenter,
+                                        rejection: rejection, foundInCenter: found)
+    }
+
+    check("нашлось в Центре — доставлено", verdict() == .delivered)
+    check("отказ системы важнее всего остального",
+          verdict(rejection: "нельзя") == .rejected("нельзя"))
+    check("при выключенных баннерах доставка тихая",
+          verdict(access: .silenced) == .deliveredQuietly)
+    check("приняли, но в Центре нет — потеря", verdict(found: false) == .lost)
+
+    // Выключенный Центр уведомлений не хранит доставленное, и проверять там
+    // нечего. Объявлять это потерей нельзя: уведомление как раз всплыло.
+    check("выключенный Центр потерей не считается",
+          verdict(keptInCenter: false, found: false) == .delivered)
+    check("выключенный Центр вместе с баннерами — тихая доставка",
+          verdict(access: .silenced, keptInCenter: false, found: false) == .deliveredQuietly)
+
+    check("успехом считается только всплывшее уведомление",
+          ReminderTest.delivered.isSuccess
+          && !ReminderTest.deliveredQuietly.isSuccess
+          && !ReminderTest.lost.isSuccess
+          && !ReminderTest.rejected("нельзя").isSuccess)
+    check("причина отказа попадает в текст результата",
+          ReminderTest.rejected("Notifications are not allowed").message
+              .contains("Notifications are not allowed"))
+}
+
 // MARK: - Итог
 
 if failures.isEmpty {

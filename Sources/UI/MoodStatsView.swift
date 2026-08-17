@@ -400,6 +400,10 @@ struct MoodStatsView: View {
             Text("Три напоминания за смену: время считается по рабочему дню и едет само, когда меняется график. В выходные, праздники и отпуск напоминаний нет; если вы только что отметились, ближайшее пропускается. Отвечать можно прямо из уведомления или нажать на него — раскроется панель.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        // Раздел открыли — перечитываем разрешение. Смотрят сюда как раз затем,
+        // чтобы проверить, дойдут ли напоминания, и показывать здесь ответ,
+        // снятый при запуске неделю назад, нельзя.
+        .onAppear { reminders.refreshAccess() }
     }
 
     /// Когда именно придут напоминания. Показывается всегда, а не прячется
@@ -409,12 +413,18 @@ struct MoodStatsView: View {
     private var reminderStatus: some View {
         switch reminders.access {
         case .denied:
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Система не разрешила уведомления — напоминания не придут.",
-                      systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
-                Button("Открыть настройки уведомлений") { reminders.openSystemSettings() }
-            }
+            // Что именно включить — сказано прямо: в системных настройках
+            // у приложения несколько переключателей, и человек, пришедший
+            // по кнопке, не должен угадывать, какой из них тот самый.
+            reminderProblem(
+                "Система запрещает уведомления — напоминания не придут.",
+                hint: "Нужно одно разрешение: «Разрешить уведомления» для Salary Flow. Звук и наклейка не нужны."
+            )
+        case .silenced:
+            reminderProblem(
+                "Уведомления разрешены, но на экране не показываются — напоминание не попадётся на глаза.",
+                hint: "В настройках уведомлений Salary Flow выберите стиль «Баннеры» или «Напоминания» вместо «Нет»."
+            )
         case .unavailable:
             Text("В этой сборке уведомления недоступны")
                 .foregroundStyle(.secondary)
@@ -424,6 +434,49 @@ struct MoodStatsView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .multilineTextAlignment(.trailing)
+            }
+        }
+        if let refusal = reminders.systemRefusal {
+            // Отказ принять запрос — не запрет: так бывает сразу после
+            // установки, пока система не подхватила новую сборку. Поэтому это
+            // спокойная строка внизу, а не предупреждение о запрете, и рядом
+            // стоит кнопка, которой это чинится за одно нажатие.
+            Label("Система не приняла запрос разрешения: \(refusal)",
+                  systemImage: "exclamationmark.circle")
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        reminderTest
+    }
+
+    private func reminderProblem(_ text: String, hint: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(text, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(hint)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Открыть настройки уведомлений") { reminders.openSystemSettings() }
+        }
+    }
+
+    /// Проверка доставки. Стоит всегда, а не только при неполадке: «уведомления
+    /// разрешены» — обещание системы, а не факт доставки. Убедиться в нём должно
+    /// быть можно сразу, а не ждать до вечера ближайшего напоминания.
+    private var reminderTest: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button("Проверить уведомление") { reminders.sendTest() }
+                    .disabled(reminders.isTesting || reminders.access == .unavailable)
+                if reminders.isTesting { ProgressView().controlSize(.small) }
+            }
+            if let result = reminders.test, !reminders.isTesting {
+                Label(result.message,
+                      systemImage: result.isSuccess ? "checkmark.circle" : "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(result.isSuccess ? Color.green : Color.orange)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

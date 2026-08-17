@@ -1,5 +1,130 @@
 import Foundation
 
+// MARK: - Разрешение на уведомления
+
+/// Что система думает про наши уведомления.
+///
+/// Состояний пять, а не два, потому что «разрешено» и «человек это увидит» —
+/// разные вещи: уведомления можно разрешить и тут же выключить баннеры, и тогда
+/// напоминание молча ляжет в Центр уведомлений. Такой случай надо показывать
+/// отдельно, иначе приложение обещает то, чего не будет.
+enum ReminderAccess: Equatable {
+    /// Нет бандла — превью и тесты. Спрашивать не у кого и некому.
+    case unavailable
+    case notAsked
+    /// Разрешено, баннер всплывёт.
+    case granted
+    /// Разрешено, но без баннера: напоминание не попадётся на глаза.
+    case silenced
+    case denied
+
+    /// Дойдёт ли уведомление хоть куда-нибудь.
+    var allowsDelivery: Bool { self == .granted || self == .silenced }
+
+    /// Для журнала. Ответ системы обязан быть записан: именно потому, что его
+    /// не писали, неверный вердикт трое суток нельзя было ни увидеть, ни
+    /// опровергнуть — в журнале стояло только «разрешение не выдано».
+    var title: String {
+        switch self {
+        case .unavailable: return "уведомления недоступны"
+        case .notAsked: return "разрешение ещё не спрашивали"
+        case .granted: return "разрешено"
+        case .silenced: return "разрешено, но показ на экране выключен"
+        case .denied: return "запрещено"
+        }
+    }
+}
+
+/// Ровно те поля системных настроек уведомлений, от которых зависит вердикт.
+///
+/// `UNNotificationSettings` приходит из другого потока, за границу актора его
+/// тащить нельзя, и в тестах он не создаётся. Поэтому решение принимается не по
+/// нему, а по трём простым значениям, снятым на месте, — и поэтому правило
+/// проверяется тестами, а не только руками.
+struct ReminderSettingsFacts: Equatable {
+    enum Authorization: Equatable { case notDetermined, denied, authorized }
+
+    var authorization: Authorization
+    /// Баннеры на экране включены.
+    var alertsShown: Bool
+    /// Доставленное хранится в Центре уведомлений.
+    var keptInNotificationCenter: Bool
+
+    init(authorization: Authorization,
+         alertsShown: Bool = true,
+         keptInNotificationCenter: Bool = true) {
+        self.authorization = authorization
+        self.alertsShown = alertsShown
+        self.keptInNotificationCenter = keptInNotificationCenter
+    }
+}
+
+/// Итог проверки «дойдёт ли уведомление на самом деле».
+enum ReminderTest: Equatable {
+    /// Доставлено, и баннер должен был всплыть.
+    case delivered
+    /// Доставлено, но всплыть не могло: баннеры выключены.
+    case deliveredQuietly
+    /// Система приняла уведомление, а до Центра оно не дошло.
+    case lost
+    /// Система отказалась принимать.
+    case rejected(String)
+
+    /// Дошло ли до человека. По этому раскрашивается строка результата:
+    /// «доставлено, но молча» — тоже неполадка, а не успех.
+    var isSuccess: Bool { self == .delivered }
+
+    var message: String {
+        switch self {
+        case .delivered:
+            return "Проверочное уведомление доставлено — напоминания дойдут."
+        case .deliveredQuietly:
+            return "Доставлено, но баннера не будет: в настройках уведомлений выключен показ на экране."
+        case .lost:
+            return "Система приняла уведомление, но до Центра оно не дошло — возможно, включён режим «Не беспокоить»."
+        case .rejected(let reason):
+            return "Не удалось отправить: \(reason)"
+        }
+    }
+}
+
+/// Как из ответа системы получается вердикт.
+///
+/// Правило вынесено из `MoodReminder` отдельно и без единого обращения
+/// к `UserNotifications`: именно здесь приложение однажды спутало «система
+/// не приняла запрос» с «человек запретил» и трое суток показывало
+/// предупреждение о запрете при выданном разрешении.
+enum ReminderAccessRules {
+    static func verdict(_ facts: ReminderSettingsFacts) -> ReminderAccess {
+        switch facts.authorization {
+        case .notDetermined: return .notAsked
+        case .denied: return .denied
+        case .authorized: return facts.alertsShown ? .granted : .silenced
+        }
+    }
+
+    /// Что считать результатом проверки.
+    ///
+    /// - Parameters:
+    ///   - access: вердикт, перечитанный у системы перед отправкой;
+    ///   - keptInCenter: хранит ли система доставленное — если нет, отсутствие
+    ///     уведомления в Центре ничего не доказывает и потерей не считается;
+    ///   - rejection: причина, по которой система не приняла уведомление;
+    ///   - foundInCenter: нашлось ли уведомление в Центре после отправки.
+    static func testVerdict(access: ReminderAccess,
+                            keptInCenter: Bool,
+                            rejection: String?,
+                            foundInCenter: Bool) -> ReminderTest {
+        if let rejection { return .rejected(rejection) }
+        // Проверить нечем — судим по настройкам, а не объявляем потерю.
+        guard foundInCenter || keptInCenter else {
+            return access == .silenced ? .deliveredQuietly : .delivered
+        }
+        guard foundInCenter else { return .lost }
+        return access == .silenced ? .deliveredQuietly : .delivered
+    }
+}
+
 /// Когда напоминать отметить настроение.
 ///
 /// Времена не задаются руками и не зашиты в код: у каждого свой рабочий день,
