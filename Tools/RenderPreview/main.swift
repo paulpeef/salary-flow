@@ -201,6 +201,25 @@ MainActor.assumeIsolated {
                     .environment(\.locale, Locale(identifier: "ru_RU")),
                  size: CGSize(width: 510, height: 2150),
                  to: "\(outDir)/settings-mood-full.png")
+
+    // Разрешение на уведомления во всех состояниях. Настоящую систему тут
+    // не спросить, а увидеть надо именно эти строки: ровно на них приложение
+    // однажды соврало про запрет при выданном разрешении.
+    let accessStates: [(String, ReminderAccess, String?, ReminderTest?)] = [
+        ("granted", .granted, nil, .delivered),
+        ("silenced", .silenced, nil, .deliveredQuietly),
+        ("denied", .denied, nil, .rejected("система запрещает уведомления этому приложению")),
+        ("refused", .notAsked, "Notifications are not allowed for this application", .lost)
+    ]
+    for (name, access, refusal, test) in accessStates {
+        let model = makeModel { _ in }
+        model.overrideNow(moment(2026, 8, 12, 14, 37))
+        model.reminders.overrideForPreview(access: access, refusal: refusal, test: test)
+        renderWindow(MoodStatsView(model: model, log: model.mood, reminders: model.reminders)
+                        .environment(\.locale, Locale(identifier: "ru_RU")),
+                     size: CGSize(width: 510, height: 320),
+                     to: "\(outDir)/reminders-\(name).png")
+    }
 }
 
 func moment(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date {

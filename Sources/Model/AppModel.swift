@@ -101,6 +101,16 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.refresh() }
         }
 
+        // Разрешение на уведомления живёт не у нас: его выдают и отзывают
+        // руками в системных настройках, пока приложение работает. Активация —
+        // тот самый момент возвращения оттуда, и без этой строки предупреждение
+        // о запрете висело бы до перезапуска.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reminders.refreshAccess() }
+        }
+
         privacy.settings = loaded
         privacy.onChange = { [weak self] reason in
             guard let self else { return }
@@ -126,6 +136,15 @@ final class AppModel: ObservableObject {
         reminders.onOpenPanel = { [weak self] in self?.openPanel() }
         reminders.onMark = { [weak self] kind in self?.toggleMood(kind) }
         if remindersWanted { reminders.requestAccessIfNeeded() }
+
+        // Проверка уведомлений из терминала: доставку иначе не проверить ничем,
+        // кроме нажатия кнопки руками, — а уведомления держит система, и её
+        // ответ не подделывается ни тестом, ни оффскрин-рендером. Итог уходит
+        // в журнал тем же путём, что и при нажатии кнопки.
+        //   SALARYFLOW_TEST_NOTIFICATION=1 /Applications/SalaryFlow.app/Contents/MacOS/SalaryFlow
+        if ProcessInfo.processInfo.environment["SALARYFLOW_TEST_NOTIFICATION"] == "1" {
+            reminders.sendTest()
+        }
 
         refresh()
     }
