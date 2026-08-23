@@ -300,6 +300,19 @@ struct AppSettings: Codable, Equatable {
     /// в другом приложении во весь экран.
     var moodReminderStyle: MoodReminderStyle = .notification
 
+    // Браузер по умолчанию
+
+    /// Показывать в панели выбор браузера по умолчанию.
+    /// По умолчанию выключено: у большинства браузер один, и блок, который
+    /// нечего переключать, был бы лишней строкой в панели у всех ради тех,
+    /// кто держит рабочий и личный отдельно.
+    var browserPickerEnabled: Bool = false
+
+    /// Браузеры, снятые из панели. Хранится именно спрятанное, а не выбранное:
+    /// так только что установленный браузер появляется в панели сам, а не
+    /// пропадает молча, пока про него не вспомнят в настройках.
+    var browserPickerHidden: [String] = []
+
     // Приватность
     var privacyOnCamera: Bool = true
     var privacyOnCapture: Bool = true
@@ -375,6 +388,8 @@ struct AppSettings: Codable, Equatable {
         moodEnabled = c.value(.moodEnabled, or: d.moodEnabled)
         moodRemindersEnabled = c.value(.moodRemindersEnabled, or: d.moodRemindersEnabled)
         moodReminderStyle = c.value(.moodReminderStyle, or: d.moodReminderStyle)
+        browserPickerEnabled = c.value(.browserPickerEnabled, or: d.browserPickerEnabled)
+        browserPickerHidden = c.value(.browserPickerHidden, or: d.browserPickerHidden)
 
         // Файл до третьей версии формата: поле «вне рабочего дня показывать»
         // разошлось на два — что показывать вообще и показывать ли вечером.

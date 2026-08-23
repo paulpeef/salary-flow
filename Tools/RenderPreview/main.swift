@@ -131,6 +131,18 @@ func demoMoodEntries(reference: Date) -> [MoodEntry] {
     return entries
 }
 
+/// Браузеры для превью. Настоящий список зависит от того, что стоит на машине,
+/// где снимают снимок, — а снимки должны быть одинаковыми везде. Пути ведут
+/// в «Программы»: где программа есть, в плашку попадёт её настоящая иконка.
+let demoBrowsers = [
+    BrowserApp(bundleID: "com.apple.Safari", name: "Safari",
+               url: URL(fileURLWithPath: "/Applications/Safari.app")),
+    BrowserApp(bundleID: "com.google.Chrome", name: "Google Chrome",
+               url: URL(fileURLWithPath: "/Applications/Google Chrome.app")),
+    BrowserApp(bundleID: "ru.yandex.desktop.yandex-browser", name: "Yandex",
+               url: URL(fileURLWithPath: "/Applications/Yandex.app"))
+]
+
 let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "."
 
 MainActor.assumeIsolated {
@@ -176,6 +188,13 @@ MainActor.assumeIsolated {
     monthFirst.overrideNow(moment(2026, 8, 12, 14, 37))
     render(PanelView(model: monthFirst).frame(width: 340), to: "\(outDir)/panel-month-first.png")
 
+    // Панель с блоком выбора браузера: самый длинный вариант панели, по нему
+    // видно, помещаются ли плашки и не жмётся ли к ним опрос.
+    let withBrowser = makeModel { $0.browserPickerEnabled = true }
+    withBrowser.browsers.overrideForPreview(installed: demoBrowsers, current: "com.google.Chrome")
+    withBrowser.overrideNow(moment(2026, 8, 12, 14, 37))
+    render(PanelView(model: withBrowser).frame(width: 340), to: "\(outDir)/panel-browser.png")
+
     // Значок строки меню. Саму строку оффскрин не воспроизвести, а вот метку
     // с каплей и цифрами — можно, и это единственный способ увидеть свою
     // картинку рядом с текстом до установки: подогнана ли высота, не вылезает
@@ -203,10 +222,15 @@ MainActor.assumeIsolated {
     let settingsSize = CGSize(width: 700, height: 500)
     let sections: [(SettingsSection, String)] = [
         (.money, "money"), (.schedule, "schedule"), (.specialDays, "days"),
-        (.counter, "counter"), (.privacy, "privacy"), (.mood, "mood"), (.app, "app")
+        (.counter, "counter"), (.privacy, "privacy"), (.mood, "mood"),
+        (.browser, "browser"), (.app, "app")
     ]
     for (section, name) in sections {
-        let sectionModel = makeModel { $0.ranges = settingsModel.settings.ranges }
+        let sectionModel = makeModel {
+            $0.ranges = settingsModel.settings.ranges
+            $0.browserPickerEnabled = true
+        }
+        sectionModel.browsers.overrideForPreview(installed: demoBrowsers, current: "com.google.Chrome")
         sectionModel.settingsSection = section
         sectionModel.overrideNow(moment(2026, 8, 12, 14, 37))
         renderWindow(SettingsView(model: sectionModel),

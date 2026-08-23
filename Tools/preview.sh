@@ -16,19 +16,20 @@ swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.b
   Sources/Model/Holidays.swift Sources/Model/WorkCalendar.swift \
   Sources/Model/Formatting.swift Sources/Model/Backup.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
-  Sources/Model/Reminders.swift \
+  Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
   Sources/Model/AppModel.swift \
   Sources/UI/PanelView.swift \
   Sources/UI/SettingsView.swift \
   Sources/UI/MenuBarLabel.swift \
   Sources/UI/CalendarGrid.swift \
   Sources/UI/MoodBlock.swift Sources/UI/MoodStatsView.swift \
+  Sources/UI/BrowserBlock.swift \
   Sources/Support/AppDelegate.swift \
   Sources/Support/LaunchAgent.swift \
   Sources/Support/MoodReminder.swift \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift \
-  Sources/Support/PrivacyMonitor.swift \
+  Sources/Support/PrivacyMonitor.swift Sources/Support/BrowserSwitcher.swift \
   Sources/Support/Updater.swift \
   Tools/RenderPreview/main.swift \
   -o .build/RenderPreview

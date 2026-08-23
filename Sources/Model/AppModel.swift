@@ -30,12 +30,25 @@ final class AppModel: ObservableObject {
             if remindByNotification, !wasByNotification {
                 reminders.requestAccessIfNeeded()
             }
+            // Блок включили только что: список браузеров нужен раньше,
+            // чем панель откроется, — иначе в ней на секунду пусто.
+            if settings.browserPickerEnabled, !oldValue.browserPickerEnabled {
+                browsers.refresh()
+            }
             refresh()
         }
     }
 
     /// Панель открыта — тикаем чаще, чтобы цифры шли плавно.
-    var panelIsOpen = false { didSet { rescheduleTimer() } }
+    var panelIsOpen = false {
+        didSet {
+            rescheduleTimer()
+            // Браузер по умолчанию меняют и мимо приложения — в системных
+            // настройках или самим браузером при запуске. Спрашиваем систему
+            // в момент раскрытия, а не показываем ответ недельной давности.
+            if panelIsOpen, settings.browserPickerEnabled { browsers.refresh() }
+        }
+    }
 
     /// Что нашёл монитор приватности: камера, захват экрана или ничего.
     @Published private(set) var detectedPrivacy: PrivacyReason?
@@ -57,6 +70,9 @@ final class AppModel: ObservableObject {
     /// Напоминания отметить настроение. Расписание считает модель — только она
     /// знает, какие дни рабочие и где границы смены.
     let reminders = MoodReminder()
+
+    /// Кто открывает ссылки и переключение этого из панели.
+    let browsers = BrowserSwitcher()
 
     /// Раздел, открытый в окне настроек. Держится здесь, а не в самом окне,
     /// потому что открывают его снаружи: кнопка «Посмотреть статистику»
@@ -111,7 +127,13 @@ final class AppModel: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.reminders.refreshAccess() }
+            Task { @MainActor in
+                self?.reminders.refreshAccess()
+                // Тот же случай, что и с разрешением: браузер по умолчанию
+                // могли сменить в системных настройках, пока нас не было.
+                guard let self, self.settings.browserPickerEnabled else { return }
+                self.browsers.refresh()
+            }
         }
 
         privacy.settings = loaded
@@ -135,6 +157,8 @@ final class AppModel: ObservableObject {
         holidayUpdates = holidays.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+
+        if loaded.browserPickerEnabled { browsers.refresh() }
 
         reminders.onOpenPanel = { [weak self] in self?.openPanel() }
         reminders.onMark = { [weak self] kind in self?.toggleMood(kind) }

@@ -33,6 +33,12 @@ struct PanelView: View {
             if model.settings.moodEnabled {
                 MoodBlock(model: model, log: model.mood)
             }
+            // Последним: это не то, зачем панель открывают, — но панель
+            // открывают чаще, чем системные настройки, и переключение
+            // рабочего браузера на личный стоит одного нажатия.
+            if model.settings.browserPickerEnabled {
+                BrowserBlock(model: model, browsers: model.browsers)
+            }
             Divider()
             buttons
         }

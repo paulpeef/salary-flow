@@ -651,6 +651,8 @@ do {
     check("своих процессов приватности нет", fresh.privacyExtraProcesses.isEmpty)
     check("суммы не скрыты по умолчанию", fresh.hideAmount == false)
     check("автозапуск по умолчанию выключен", fresh.launchAtLogin == false)
+    check("выбор браузера по умолчанию выключен", fresh.browserPickerEnabled == false)
+    check("спрятанных браузеров по умолчанию нет", fresh.browserPickerHidden.isEmpty)
     check("часовой пояс берётся с машины пользователя",
           fresh.timeZoneID == TimeZone.current.identifier)
 }
@@ -1404,6 +1406,87 @@ do {
     check("перемешанная история выправляется по времени",
           MoodRules.normalized([theirs[0], mine[1], mine[0]]).map(\.at)
               == [mine[0], mine[1], theirs[0]].map(\.at))
+}
+
+// MARK: - Браузер по умолчанию
+
+func browser(_ id: String, _ name: String) -> BrowserApp {
+    BrowserApp(bundleID: id, name: name, url: URL(fileURLWithPath: "/Applications/\(name).app"))
+}
+
+do {
+    let safari = browser("com.apple.Safari", "Safari")
+    let chrome = browser("com.google.Chrome", "Google Chrome")
+    let yandex = browser("ru.yandex.desktop.yandex-browser", "Yandex")
+    let all = [yandex, safari, chrome]        // как их отдаёт система: текущий первым
+
+    let plain = BrowserRules.panelList(installed: all, hidden: [], current: yandex.bundleID)
+    check("порядок плашек — по имени, а не по пригодности",
+          plain.map(\.name) == ["Google Chrome", "Safari", "Yandex"],
+          "получено \(plain.map(\.name))")
+
+    // Порядок не должен зависеть от того, кто сейчас по умолчанию: иначе
+    // плашки менялись бы местами после каждого переключения, а нажимают
+    // их по памяти.
+    let afterSwitch = BrowserRules.panelList(installed: [chrome, safari, yandex],
+                                             hidden: [], current: chrome.bundleID)
+    check("переключение не переставляет плашки", afterSwitch.map(\.name) == plain.map(\.name))
+
+    let filtered = BrowserRules.panelList(installed: all, hidden: [safari.bundleID],
+                                          current: yandex.bundleID)
+    check("снятый галочкой браузер в панель не идёт",
+          filtered.map(\.bundleID) == [chrome.bundleID, yandex.bundleID])
+
+    // Блок называется «Браузер по умолчанию» — не показать в нём текущий
+    // значило бы соврать; заодно это спасает от пустого блока.
+    let hiddenCurrent = BrowserRules.panelList(installed: all,
+                                               hidden: [safari.bundleID, yandex.bundleID],
+                                               current: yandex.bundleID)
+    check("текущий браузер показывается даже со снятой галочкой",
+          hiddenCurrent.map(\.bundleID) == [chrome.bundleID, yandex.bundleID])
+
+    let everythingHidden = BrowserRules.panelList(
+        installed: all,
+        hidden: Set(all.map(\.bundleID)),
+        current: chrome.bundleID)
+    check("все галочки сняты — остаётся хотя бы текущий",
+          everythingHidden.map(\.bundleID) == [chrome.bundleID])
+
+    // Одна и та же программа может лежать в двух местах — например, копия
+    // в «Загрузках» рядом с установленной.
+    let twice = [chrome,
+                 BrowserApp(bundleID: chrome.bundleID, name: "Google Chrome",
+                            url: URL(fileURLWithPath: "/Users/me/Downloads/Google Chrome.app")),
+                 safari]
+    let unique = BrowserRules.panelList(installed: twice, hidden: [], current: chrome.bundleID)
+    check("две копии одной программы дают одну плашку",
+          unique.map(\.bundleID) == [chrome.bundleID, safari.bundleID],
+          "получено \(unique.map(\.bundleID))")
+    check("остаётся та копия, которую система назвала первой",
+          unique.first?.url.path == "/Applications/Google Chrome.app")
+
+    // Браузер по умолчанию мог быть удалён: система тогда не назовёт никого.
+    let unknown = BrowserRules.panelList(installed: all, hidden: [], current: nil)
+    check("без текущего браузера список не ломается", unknown.count == 3)
+}
+
+do {
+    // Спрятанные браузеры едут в файле настроек и переживают его запись.
+    var settings = baseSettings()
+    settings.browserPickerEnabled = true
+    settings.browserPickerHidden = ["com.apple.Safari"]
+    guard let data = try? JSONEncoder().encode(settings),
+          let restored = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+        check("настройки браузера переживают запись и чтение", false, "не удалось закодировать")
+        exit(1)
+    }
+    check("настройки браузера переживают запись и чтение", restored == settings)
+
+    // Файл, записанный до появления блока: оба поля берут значения по умолчанию,
+    // и блок не возникает в панели сам собой.
+    let old = decodeSettings("{ \"monthlyAmount\": 210000 }")
+    check("старый файл не включает блок браузера", old?.browserPickerEnabled == false)
+    check("старый файл не прячет браузеров", old?.browserPickerHidden.isEmpty == true)
 }
 
 // MARK: - Итог
