@@ -1,13 +1,14 @@
 #!/bin/bash
-# Зонд раскрытия панели из кода: меряет, открывается ли панель меню-бара
-# по программному нажатию, когда приложение неактивно, — как при нажатии
-# на уведомление. Боевые настройки и журнал не трогает.
+# Зонд таймера: гоняет настоящую модель по настоящим часам — фазы, пауза,
+# итог дня и сдвиг напоминания о настроении на конец сессии.
+# Боевые настройки, журнал и отметки не трогает.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ./Tools/fetch-sparkle.sh
 
-swiftc -parse-as-library -O -F .build/sparkle -framework Sparkle \
+mkdir -p .build
+swiftc -O -F .build/sparkle -framework Sparkle \
   -Xlinker -rpath -Xlinker "$PWD/.build/sparkle" \
   -target arm64-apple-macos14.0 \
   Sources/Model/Settings.swift Sources/Model/Engine.swift \
@@ -15,7 +16,8 @@ swiftc -parse-as-library -O -F .build/sparkle -framework Sparkle \
   Sources/Model/Formatting.swift Sources/Model/Backup.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
-  Sources/Model/FocusTimer.swift Sources/Model/AppModel.swift \
+  Sources/Model/FocusTimer.swift \
+  Sources/Model/AppModel.swift \
   Sources/UI/PanelView.swift Sources/UI/SettingsView.swift \
   Sources/UI/MenuBarLabel.swift Sources/UI/CalendarGrid.swift \
   Sources/UI/MoodBlock.swift Sources/UI/MoodStatsView.swift \
@@ -25,11 +27,11 @@ swiftc -parse-as-library -O -F .build/sparkle -framework Sparkle \
   Sources/Support/MoodReminder.swift Sources/Support/Migration.swift \
   Sources/Support/Log.swift Sources/Support/PrivacyMonitor.swift \
   Sources/Support/BrowserSwitcher.swift Sources/Support/Updater.swift \
-  Tools/PanelProbe/main.swift \
-  -o .build/PanelProbe
+  Tools/TimerProbe/main.swift \
+  -o .build/TimerProbe
 
 SALARYFLOW_LOG_DIR="$(mktemp -d)/logs" \
 SALARYFLOW_SETTINGS="$(mktemp -d)/probe-settings.json" \
 SALARYFLOW_MOOD="$(mktemp -d)/probe-mood.json" \
 SALARYFLOW_TIMERS="$(mktemp -d)/probe-timers.json" \
-.build/PanelProbe
+.build/TimerProbe

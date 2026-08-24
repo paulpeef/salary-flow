@@ -1553,6 +1553,267 @@ do {
     check("старый файл не прячет браузеров", old?.browserPickerHidden.isEmpty == true)
 }
 
+// MARK: - Таймер: часы и подписи
+
+do {
+    check("остаток округляется вверх", TimerRules.clock(0.4) == "0:01", TimerRules.clock(0.4))
+    check("ровные двадцать пять минут", TimerRules.clock(25 * 60) == "25:00")
+    check("меньше минуты", TimerRules.clock(29) == "0:29")
+    check("больше часа", TimerRules.clock(3900) == "1:05:00", TimerRules.clock(3900))
+    check("ноль", TimerRules.clock(0) == "0:00")
+
+    check("длительность в секундах", TimerRules.length(30) == "30 с")
+    check("длительность в минутах", TimerRules.length(25 * 60) == "25 мин")
+    check("ровный час без нулевых минут", TimerRules.length(3600) == "1 ч", TimerRules.length(3600))
+    check("час с минутами", TimerRules.length(3900) == "1 ч 5 мин")
+    check("полторы минуты", TimerRules.length(90) == "1 мин 30 с", TimerRules.length(90))
+}
+
+// MARK: - Таймер: ход, пауза и сон компьютера
+
+do {
+    let start = moment(2026, 8, 12, 14, 0)
+    let run = TimerRules.start(TimerPreset(name: "Фокус", seconds: 25 * 60), now: start)
+
+    check("срок = старт плюс длительность", run.deadline == start.addingTimeInterval(1500))
+
+    if case .running(let left) = TimerRules.phase(run, now: start.addingTimeInterval(60)) {
+        check("через минуту осталось 24", nearly(left, 1440))
+    } else {
+        check("через минуту таймер идёт", false)
+    }
+
+    check("в середине пути пройдена половина",
+          nearly(TimerRules.progress(run, now: start.addingTimeInterval(750)), 0.5))
+
+    // Последние три секунды — мигание, и ни секундой раньше.
+    check("за 4 секунды до конца не мигает",
+          !TimerRules.blinking(run, now: start.addingTimeInterval(1496)))
+    check("за 3 секунды до конца мигает",
+          TimerRules.blinking(run, now: start.addingTimeInterval(1497)))
+    check("за секунду до конца мигает",
+          TimerRules.blinking(run, now: start.addingTimeInterval(1499.5)))
+
+    check("после срока показывается «Готово»",
+          TimerRules.phase(run, now: start.addingTimeInterval(1501)) == .done)
+    check("через три секунды «Готово» снимается",
+          TimerRules.phase(run, now: start.addingTimeInterval(1503.5)) == .gone)
+
+    // Компьютер спал полчаса: мигать и поздравлять задним числом нечего.
+    check("проспанный таймер исчезает без мигания",
+          TimerRules.phase(run, now: start.addingTimeInterval(3600)) == .gone)
+    check("проспанный таймер не мигает",
+          !TimerRules.blinking(run, now: start.addingTimeInterval(3600)))
+
+    // Пауза держит остаток, сколько бы ни длилась: срок едет вместе с ней.
+    let paused = TimerRules.paused(run, now: start.addingTimeInterval(300))
+    check("пауза запомнила остаток", nearly(paused.pausedRemaining ?? 0, 1200))
+    check("на паузе фаза не идёт",
+          TimerRules.phase(paused, now: start.addingTimeInterval(3600)) == .paused(remaining: 1200))
+    check("на паузе прогресс стоит",
+          nearly(TimerRules.progress(paused, now: start.addingTimeInterval(3600)), 0.2))
+
+    let resumed = TimerRules.resumed(paused, now: start.addingTimeInterval(3600))
+    check("продолжение отсчитывает остаток заново",
+          resumed.deadline == start.addingTimeInterval(3600 + 1200))
+    check("продолженный таймер снова идёт", !resumed.isPaused)
+
+    // Стрелка обходит круг за минуту и на паузе замирает.
+    check("стрелка на старте вверху", nearly(TimerRules.handAngle(run, now: start), 0))
+    check("через полминуты стрелка внизу",
+          nearly(TimerRules.handAngle(run, now: start.addingTimeInterval(30)), 180))
+    check("через минуту стрелка снова вверху",
+          nearly(TimerRules.handAngle(run, now: start.addingTimeInterval(60)), 0))
+    check("на паузе стрелка стоит",
+          nearly(TimerRules.handAngle(paused, now: start.addingTimeInterval(3600)),
+                 TimerRules.handAngle(paused, now: start.addingTimeInterval(310))))
+
+    // Мигание: полсекунды горит, полсекунды нет.
+    let tick = Date(timeIntervalSince1970: 1_000_000)
+    check("мигание меняется каждые полсекунды",
+          TimerRules.blinkOn(tick) != TimerRules.blinkOn(tick.addingTimeInterval(0.5)))
+    check("мигание повторяется через секунду",
+          TimerRules.blinkOn(tick) == TimerRules.blinkOn(tick.addingTimeInterval(1)))
+}
+
+// MARK: - Таймер: пресеты и итог дня
+
+do {
+    // Файл настроек могли править руками: ноль и сутки в таймер не проходят.
+    check("слишком короткий приводится к минимуму",
+          TimerPreset(name: "Ноль", seconds: 0).duration == TimeInterval(TimerRules.minSeconds))
+    check("слишком длинный приводится к максимуму",
+          TimerPreset(name: "Сутки", seconds: 86_400).duration == TimeInterval(TimerRules.maxSeconds))
+
+    let messy = [
+        TimerPreset(name: "  ", seconds: 60),
+        TimerPreset(name: "Фокус", seconds: 0),
+        TimerPreset(name: "Перерыв", seconds: 300),
+        TimerPreset(name: "Лишний", seconds: 60),
+    ]
+    let fixed = TimerRules.normalized(messy)
+    check("больше трёх таймеров не показывается", fixed.count == TimerRules.maxPresets)
+    check("пустое имя заменяется", fixed[0].name == "Таймер")
+    check("длительность приводится к границам", fixed[1].seconds == TimerRules.minSeconds)
+    check("нормальный пресет не меняется", fixed[2] == messy[2])
+
+    // Счёт запусков: по каждому таймеру отдельно и только за нужный день.
+    // Общей суммы нет намеренно: шесть подходов по полминуты и один помидор
+    // на двадцать пять минут дают «28 минут», и это ничего не значит.
+    let today = DayStamp(year: 2026, month: 8, day: 12)
+    let yesterday = DayStamp(year: 2026, month: 8, day: 11)
+    let focus = UUID()
+    let grip = UUID()
+    let log = [
+        TimerDone(preset: focus, at: moment(2026, 8, 11, 12, 0), day: yesterday, name: "Фокус", seconds: 1500),
+        TimerDone(preset: focus, at: moment(2026, 8, 12, 11, 0), day: today, name: "Фокус", seconds: 1500),
+        TimerDone(preset: grip, at: moment(2026, 8, 12, 12, 0), day: today, name: "Эспандер", seconds: 30),
+        TimerDone(preset: grip, at: moment(2026, 8, 12, 12, 1), day: today, name: "Эспандер", seconds: 30),
+    ]
+    check("счёт считает только свой таймер и только свой день",
+          TimerRules.launches(log, preset: grip, on: today) == 2,
+          "\(TimerRules.launches(log, preset: grip, on: today))")
+    check("вчерашние заходы в сегодняшний счёт не идут",
+          TimerRules.launches(log, preset: focus, on: today) == 1)
+    check("незнакомый таймер — ноль", TimerRules.launches(log, preset: UUID(), on: today) == 0)
+    check("подсказка про запуски", TimerRules.launchNote(2) == "Сегодня запускали 2 раза",
+          TimerRules.launchNote(2))
+    check("подсказка, когда ещё не запускали",
+          TimerRules.launchNote(0) == "Сегодня ещё не запускали")
+
+    // Удалённый таймер уносит свой счёт: иначе файл копил бы историю того,
+    // чего в панели давно нет.
+    let kept = TimerRules.pruned(log, keeping: [focus])
+    check("записи удалённого таймера выброшены", kept.count == 2)
+    check("записи живого таймера остались", kept.allSatisfy { $0.preset == focus })
+
+    // Журнал запусков переживает запись и чтение, а битая запись не уносит
+    // с собой остальные.
+    guard let logData = try? TimerLog.encode(log) else {
+        check("журнал запусков кодируется", false)
+        exit(1)
+    }
+    let restoredLog = TimerLog.decode(logData)
+    check("журнал запусков переживает запись и чтение", restoredLog.entries == log)
+    check("целых записей не потеряно", restoredLog.skipped == 0)
+
+    let brokenLog = TimerLog.decode(Data(#"{"version":1,"entries":[{"at":"не дата"},{"preset":"\#(focus.uuidString)","at":"2026-08-12T09:00:00Z"}]}"#.utf8))
+    check("битая запись выбрасывается по одной", brokenLog.entries.count == 1)
+    check("выброшенные записи считаются", brokenLog.skipped == 1)
+
+    // Настройки таймера переживают запись и чтение, а старый файл его не включает.
+    var settings = baseSettings()
+    settings.timerEnabled = true
+    settings.timerDial = .hand
+    settings.timerPresets = [TimerPreset(name: "Эспандер", seconds: 30)]
+    guard let data = try? JSONEncoder().encode(settings),
+          let restored = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+        check("настройки таймера переживают запись и чтение", false, "не удалось закодировать")
+        exit(1)
+    }
+    check("настройки таймера переживают запись и чтение", restored == settings)
+
+    let old = decodeSettings("{ \"monthlyAmount\": 210000 }")
+    check("старый файл не включает таймер", old?.timerEnabled == false)
+    check("у старого файла три заготовки", old?.timerPresets.count == 3)
+    check("по умолчанию в строке меню кольцо", old?.timerDial == .ring)
+}
+
+// MARK: - Таймер: горячие клавиши
+
+do {
+    // Подпись собирается в том же порядке, в каком модификаторы пишет система.
+    let full = TimerHotkey(keyCode: 25, command: true, option: true, control: true, shift: true)
+    check("подпись сочетания", TimerRules.hotkeyName(full) == "⌃⌥⇧⌘9", TimerRules.hotkeyName(full))
+    check("подпись без модификаторов — только клавиша",
+          TimerRules.hotkeyName(TimerHotkey(keyCode: 3)) == "F")
+    check("имя особой клавиши", TimerRules.keyName(49) == "Пробел")
+    check("незнакомая клавиша называется кодом", TimerRules.keyName(200) == "клавиша 200")
+
+    // Одного Shift мало: ⇧1 — это «!», и таймер запускался бы посреди набора.
+    check("Shift сам по себе не годится", !TimerHotkey(keyCode: 18, shift: true).isValid)
+    check("Cmd годится", TimerHotkey(keyCode: 18, command: true).isValid)
+    check("Alt годится", TimerHotkey(keyCode: 18, option: true).isValid)
+    check("Ctrl годится", TimerHotkey(keyCode: 18, control: true).isValid)
+
+    // Назначение снимает сочетание с прежнего владельца: два таймера на одних
+    // клавишах — это молчаливая поломка одного из них.
+    let combo = TimerHotkey(keyCode: 18, command: true, option: true)
+    let presets = [
+        TimerPreset(name: "Фокус", seconds: 1500, hotkey: combo),
+        TimerPreset(name: "Эспандер", seconds: 30),
+    ]
+    let moved = TimerRules.assigning(combo, to: presets[1].id, in: presets)
+    check("сочетание переехало на новый таймер", moved[1].hotkey == combo)
+    check("у прежнего владельца сочетание снято", moved[0].hotkey == nil)
+
+    let cleared = TimerRules.assigning(nil, to: presets[0].id, in: presets)
+    check("пустое назначение снимает сочетание", cleared[0].hotkey == nil)
+
+    let refused = TimerRules.assigning(TimerHotkey(keyCode: 18, shift: true),
+                                       to: presets[0].id, in: presets)
+    check("негодное сочетание не назначается", refused[0].hotkey == nil)
+
+    // Сочетание переживает файл настроек.
+    var settings = baseSettings()
+    settings.timerPresets = [TimerPreset(name: "Эспандер", seconds: 30, hotkey: combo)]
+    guard let data = try? JSONEncoder().encode(settings),
+          let restored = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+        check("сочетание переживает запись и чтение", false, "не удалось закодировать")
+        exit(1)
+    }
+    check("сочетание переживает запись и чтение", restored.timerPresets.first?.hotkey == combo)
+
+    // Файл, записанный до появления клавиш: поле просто пустое.
+    let old = decodeSettings("{ \"monthlyAmount\": 210000 }")
+    check("у старого файла сочетаний нет",
+          old?.timerPresets.allSatisfy { $0.hotkey == nil } == true)
+}
+
+// MARK: - Таймер и напоминания о настроении
+
+do {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = moscow
+    let e = Engine(settings: baseSettings())
+
+    func shift(_ day: DayStamp) -> (start: Date, end: Date)? {
+        guard e.state(of: day, now: day.startOfDay(in: calendar)).isWorkday else { return nil }
+        return e.shift(for: day)
+    }
+
+    let now = moment(2026, 8, 12, 10, 55)        // среда, до первого напоминания
+    let plain = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift, marks: [])
+    check("без таймера первое напоминание в 11:00",
+          plain.first == moment(2026, 8, 12, 11, 0),
+          plain.first.map { Fmt.clock($0, timeZone: moscow) } ?? "нет")
+
+    // Фокус-сессия до 11:19, тишина до 11:20 — напоминание уезжает на её конец.
+    let focusEnd = moment(2026, 8, 12, 11, 20)
+    let shifted = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
+                                         marks: [], focusEnd: focusEnd)
+    check("напоминание внутри сессии сдвигается на её конец",
+          shifted.first == focusEnd,
+          shifted.first.map { Fmt.clock($0, timeZone: moscow) } ?? "нет")
+    check("напоминание не пропадает совсем", shifted.count == plain.count)
+    check("следующие напоминания стоят на своих местах",
+          shifted.contains(moment(2026, 8, 12, 14, 30)))
+
+    // Два напоминания, попавшие в одну сессию, складываются в одно:
+    // звучать подряд им незачем.
+    let long = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
+                                      marks: [], focusEnd: moment(2026, 8, 12, 14, 40))
+    check("два напоминания в одной сессии складываются в одно",
+          long.count == plain.count - 1, "получено \(long.count) против \(plain.count)")
+    check("сложенное напоминание встаёт на конец сессии",
+          long.first == moment(2026, 8, 12, 14, 40))
+
+    // Сессия кончилась раньше первого напоминания — план не трогается.
+    let early = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
+                                       marks: [], focusEnd: moment(2026, 8, 12, 10, 58))
+    check("сессия до напоминания план не двигает", early == plain)
+}
+
 // MARK: - Итог
 
 if failures.isEmpty {

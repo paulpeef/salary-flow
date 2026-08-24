@@ -195,6 +195,33 @@ MainActor.assumeIsolated {
     withBrowser.overrideNow(moment(2026, 8, 12, 14, 37))
     render(PanelView(model: withBrowser).frame(width: 340), to: "\(outDir)/panel-browser.png")
 
+    // Панель с таймером. Снимков четыре, и смотреть на них надо вместе:
+    // высота у всех обязана совпасть до пикселя, иначе панель будет прыгать
+    // на запуске и на финише таймера — а окно меню-бара перерисовывает
+    // подложку не в такт с содержимым.
+    let timerStart = moment(2026, 8, 12, 14, 37)
+    let timerStates: [(String, TimeInterval, Bool)] = [
+        ("running", 29, false),      // идёт: осталось 24:31
+        ("paused", 29, true),        // на паузе
+        ("blink", 1498, false),      // последние секунды, мигание горит
+        ("done", 1501, false),       // «Готово»
+    ]
+
+    let timerIdle = makeModel { $0.timerEnabled = true }
+    timerIdle.overrideNow(timerStart)
+    render(PanelView(model: timerIdle).frame(width: 340), to: "\(outDir)/panel-timer.png")
+
+    for (name, offset, paused) in timerStates {
+        let model = makeModel { $0.timerEnabled = true }
+        model.overrideNow(timerStart)
+        model.startTimer(model.timerPresets[0])
+        model.overrideNow(timerStart.addingTimeInterval(offset))
+        // Пауза ставится после сдвига времени: иначе на снимке замирали бы
+        // нетронутые 25:00 и было бы не видно, что таймер уже шёл.
+        if paused { model.pauseTimer() }
+        render(PanelView(model: model).frame(width: 340), to: "\(outDir)/panel-timer-\(name).png")
+    }
+
     // Значок строки меню. Саму строку оффскрин не воспроизвести, а вот метку
     // с каплей и цифрами — можно, и это единственный способ увидеть свою
     // картинку рядом с текстом до установки: подогнана ли высота, не вылезает
@@ -210,6 +237,40 @@ MainActor.assumeIsolated {
                to: "\(outDir)/menubar-\(name).png", scale: 8)
     }
 
+    // Таймер в строке меню: оба циферблата во всех состояниях. Выбирать
+    // между кольцом и стрелкой можно только глазами — на тринадцати точках
+    // никакое рассуждение не заменяет снимка.
+    for (dialName, dial) in [("ring", TimerDial.ring), ("hand", TimerDial.hand)] {
+        for (stateName, offset, paused) in timerStates {
+            let model = makeModel {
+                $0.timerEnabled = true
+                $0.timerDial = dial
+            }
+            model.overrideNow(timerStart)
+            model.startTimer(model.timerPresets[0])
+            model.overrideNow(timerStart.addingTimeInterval(offset))
+            if paused { model.pauseTimer() }
+            render(MenuBarLabel(model: model)
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Color(white: 0.92)),
+                   to: "\(outDir)/menubar-timer-\(dialName)-\(stateName).png", scale: 8)
+        }
+    }
+
+    // Мигание гаснет на полсекунды — снимок гаснущей половины отдельно:
+    // читаемость проверяется по худшему из двух кадров, а не по лучшему.
+    let blinkOff = makeModel { $0.timerEnabled = true }
+    blinkOff.overrideNow(timerStart)
+    blinkOff.startTimer(blinkOff.timerPresets[0])
+    blinkOff.overrideNow(timerStart.addingTimeInterval(1497.5))
+    render(MenuBarLabel(model: blinkOff)
+            .foregroundStyle(.black)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Color(white: 0.92)),
+           to: "\(outDir)/menubar-timer-ring-blink-off.png", scale: 8)
+    render(PanelView(model: blinkOff).frame(width: 340), to: "\(outDir)/panel-timer-blink-off.png")
+
     // Настройки.
     let settingsModel = makeModel {
         $0.ranges = [
@@ -223,12 +284,18 @@ MainActor.assumeIsolated {
     let sections: [(SettingsSection, String)] = [
         (.money, "money"), (.schedule, "schedule"), (.specialDays, "days"),
         (.counter, "counter"), (.privacy, "privacy"), (.mood, "mood"),
-        (.browser, "browser"), (.app, "app")
+        (.timer, "timer"), (.browser, "browser"), (.app, "app")
     ]
     for (section, name) in sections {
         let sectionModel = makeModel {
             $0.ranges = settingsModel.settings.ranges
             $0.browserPickerEnabled = true
+            $0.timerEnabled = true
+            // Одному таймеру назначено сочетание, остальным нет: на снимке
+            // должны быть видны оба состояния кнопки.
+            $0.timerPresets = TimerRules.assigning(
+                TimerHotkey(keyCode: 25, command: true, option: true),
+                to: $0.timerPresets[1].id, in: $0.timerPresets)
         }
         sectionModel.browsers.overrideForPreview(installed: demoBrowsers, current: "com.google.Chrome")
         sectionModel.settingsSection = section

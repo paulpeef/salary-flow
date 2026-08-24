@@ -13,6 +13,7 @@ swiftc -O \
   Sources/Model/Formatting.swift Sources/Model/Backup.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
+  Sources/Model/FocusTimer.swift \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift \
   Sources/Support/PrivacyMonitor.swift \
@@ -21,4 +22,5 @@ swiftc -O \
 
 SALARYFLOW_LOG_DIR="$(mktemp -d)/logs" \
 SALARYFLOW_MOOD="$(mktemp -d)/test-mood.json" \
+SALARYFLOW_TIMERS="$(mktemp -d)/test-timers.json" \
 "$BUILD/EngineTests"

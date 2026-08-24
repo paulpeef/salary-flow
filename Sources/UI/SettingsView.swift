@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
-    case money, schedule, specialDays, counter, privacy, mood, browser, app
+    case money, schedule, specialDays, counter, privacy, mood, timer, browser, app
 
     var id: Int { rawValue }
 
@@ -15,6 +15,7 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
         case .counter: return "Счётчик"
         case .privacy: return "Приватность"
         case .mood: return "Настроение"
+        case .timer: return "Таймер"
         case .browser: return "Браузер"
         case .app: return "Приложение"
         }
@@ -28,6 +29,7 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
         case .counter: return "menubar.rectangle"
         case .privacy: return "eye.slash"
         case .mood: return "face.smiling"
+        case .timer: return "timer"
         case .browser: return "globe"
         case .app: return "gearshape"
         }
@@ -63,7 +65,7 @@ enum SettingsGroup: Int, CaseIterable, Identifiable {
         switch self {
         case .calculation: return [.money, .schedule, .specialDays]
         case .display: return [.counter, .privacy]
-        case .rest: return [.mood, .browser, .app]
+        case .rest: return [.mood, .timer, .browser, .app]
         }
     }
 }
@@ -126,6 +128,7 @@ struct SettingsView: View {
         case .counter: CounterTab(model: model)
         case .privacy: PrivacyTab(model: model)
         case .mood: MoodStatsView(model: model, log: model.mood, reminders: model.reminders)
+        case .timer: TimerTab(model: model)
         case .browser: BrowserTab(model: model, browsers: model.browsers)
         case .app: AppTab(model: model)
         }

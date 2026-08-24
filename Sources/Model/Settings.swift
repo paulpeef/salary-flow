@@ -341,6 +341,21 @@ struct AppSettings: Codable, Equatable {
     /// пропадает молча, пока про него не вспомнят в настройках.
     var browserPickerHidden: [String] = []
 
+    // Таймер
+
+    /// Показывать в панели таймер.
+    /// По умолчанию выключен, как и выбор браузера: панель нужна прежде всего
+    /// ради денег, и необязательные блоки в ней включает тот, кому они нужны.
+    var timerEnabled: Bool = false
+
+    /// Настроенные таймеры, до трёх. Хранятся списком, а не тремя полями:
+    /// одного человеку хватает, а пустые строки в настройках выглядели бы
+    /// как незаполненная анкета.
+    var timerPresets: [TimerPreset] = TimerPreset.defaults
+
+    /// Что рисовать в строке меню, пока таймер идёт.
+    var timerDial: TimerDial = .ring
+
     // Приватность
     var privacyOnCamera: Bool = true
     var privacyOnCapture: Bool = true
@@ -424,6 +439,9 @@ struct AppSettings: Codable, Equatable {
         moodReminderStyle = c.value(.moodReminderStyle, or: d.moodReminderStyle)
         browserPickerEnabled = c.value(.browserPickerEnabled, or: d.browserPickerEnabled)
         browserPickerHidden = c.value(.browserPickerHidden, or: d.browserPickerHidden)
+        timerEnabled = c.value(.timerEnabled, or: d.timerEnabled)
+        timerPresets = c.value(.timerPresets, or: d.timerPresets)
+        timerDial = c.value(.timerDial, or: d.timerDial)
 
         // Файл до третьей версии формата: поле «вне рабочего дня показывать»
         // разошлось на два — что показывать вообще и показывать ли вечером.

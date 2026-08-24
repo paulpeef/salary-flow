@@ -30,6 +30,12 @@ struct PanelView: View {
             compact(model.settings.menuBarTotal == .day ? month(s) : today(s))
             Divider()
             statsBlock(s)
+            // Выше опроса: таймер — это действие, ради которого панель и
+            // открыли, а опрос — вопрос вдогонку. На созвоне открывают именно
+            // ради него, и искать его под облаком плашек человек не должен.
+            if model.settings.timerEnabled {
+                TimerBlock(model: model)
+            }
             if model.settings.moodEnabled {
                 MoodBlock(model: model, log: model.mood)
             }

@@ -33,9 +33,63 @@ struct MenuBarLabel: View {
     }
 
     var body: some View {
+        // Таймер занимает строку меню целиком: денег в нём нет, поэтому он
+        // виден и в приватном режиме — а это ровно тот случай, ради которого
+        // он и заведён. Обычный вид возвращается сам, когда таймер отработал.
+        if let run = model.timerRun, let phase = model.timerPhase {
+            timer(run, phase)
+        } else {
+            money
+        }
+    }
+
+    // MARK: Таймер
+
+    private func timer(_ run: TimerRun, _ phase: TimerPhase) -> some View {
+        let now = model.snapshot.now
+        let finished = phase == .done
+        let blinking = TimerRules.blinking(run, now: now)
+        let dim = blinking && !TimerRules.blinkOn(now)
+        // Зелёное в последние секунды и на «Готово». Мигание не только цветом:
+        // на цветных обоях и в светлой теме зелёный сам по себе теряется,
+        // и в этом проекте это уже стоило одной нечитаемой строки.
+        let alarm = (finished || blinking) && !dim
+
+        return HStack(spacing: 4) {
+            TimerDialView(dial: model.settings.timerDial, run: run, now: now)
+                .frame(width: 13, height: 13)
+
+            // Ширина за весь заход не меняется: она задаёт точку, к которой
+            // прицеплена панель, и от скачка панель уезжает вбок. Оба текста,
+            // которые здесь побывают, стоят невидимыми образцами.
+            ZStack(alignment: .trailing) {
+                Text(TimerRules.clock(run.total)).monospacedDigit().hidden()
+                Text(TimerRules.doneLabel).hidden()
+                Text(finished ? TimerRules.doneLabel : TimerRules.clock(remaining(phase)))
+                    .monospacedDigit()
+            }
+        }
+        // Цвет назначается только на тревоге: в обычные секунды его выбирает
+        // система — она же гасит и подсвечивает строку меню под тему,
+        // под обои и под открытую панель.
+        .foregroundStyle(alarm ? AnyShapeStyle(Color.green) : AnyShapeStyle(.foreground))
+        // Пауза приглушает счётчик: замершие цифры от идущих не отличить.
+        .opacity(run.isPaused ? 0.5 : (dim ? 0.4 : 1))
+    }
+
+    private func remaining(_ phase: TimerPhase) -> TimeInterval {
+        switch phase {
+        case .running(let left), .paused(let left): return left
+        case .done, .gone: return 0
+        }
+    }
+
+    // MARK: Деньги
+
+    private var money: some View {
         let s = model.snapshot
 
-        HStack(spacing: 4) {
+        return HStack(spacing: 4) {
             if model.settings.showIcon {
                 if let drop = MenuBarLabel.drop {
                     Image(nsImage: drop)

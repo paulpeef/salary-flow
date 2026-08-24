@@ -244,11 +244,13 @@ enum MoodReminderRules {
     ///
     /// - Parameters:
     ///   - shift: границы смены этого дня либо nil, если день нерабочий;
-    ///   - marks: моменты уже сделанных отметок.
+    ///   - marks: моменты уже сделанных отметок;
+    ///   - focusEnd: конец идущей фокус-сессии, до которого напоминать нельзя.
     static func plan(now: Date,
                      calendar: Calendar,
                      shift: (DayStamp) -> (start: Date, end: Date)?,
-                     marks: [Date]) -> [Date] {
+                     marks: [Date],
+                     focusEnd: Date? = nil) -> [Date] {
         var result: [Date] = []
         let today = calendar.startOfDay(for: now)
         for offset in 0..<horizonDays {
@@ -261,6 +263,25 @@ enum MoodReminderRules {
                 if !answeredJustBefore { result.append(moment) }
             }
         }
-        return result.sorted()
+        return shifted(result.sorted(), pastFocus: focusEnd)
+    }
+
+    /// Напоминание, попавшее в фокус-сессию, сдвигается на её конец.
+    ///
+    /// Раскрытая панель посреди помидора — ровно то, от чего таймер и
+    /// защищает; уведомление посреди него не лучше. Пропускать напоминание
+    /// совсем тоже нельзя: три раза за смену — это и так немного.
+    ///
+    /// Сдвинутые моменты складываются в один: двум напоминаниям, уехавшим
+    /// на один и тот же конец сессии, незачем звучать подряд.
+    private static func shifted(_ plan: [Date], pastFocus focusEnd: Date?) -> [Date] {
+        guard let focusEnd else { return plan }
+        var result: [Date] = []
+        for moment in plan {
+            let moved = moment <= focusEnd ? focusEnd : moment
+            if let last = result.last, moved.timeIntervalSince(last) < minimumGap { continue }
+            result.append(moved)
+        }
+        return result
     }
 }

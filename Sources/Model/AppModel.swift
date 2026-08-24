@@ -30,6 +30,24 @@ final class AppModel: ObservableObject {
             if remindByNotification, !wasByNotification {
                 reminders.requestAccessIfNeeded()
             }
+            // Блок выключили, а таймер идёт: единственное место, где его
+            // можно остановить, только что исчезло из панели.
+            if !settings.timerEnabled, oldValue.timerEnabled, timerRun != nil {
+                stopTimer()
+            }
+            // Сочетания могли назначить, снять или отдать другому таймеру —
+            // а ещё блок могли выключить целиком, и тогда клавиш быть не должно.
+            if settings.timerPresets != oldValue.timerPresets
+                || settings.timerEnabled != oldValue.timerEnabled {
+                applyHotKeys()
+            }
+            // Таймер удалили из настроек — его счёт запусков уходит следом.
+            // Сравниваем списки, а не ловим нажатие кнопки: настройки правят
+            // и руками в файле, и импортом копии с другой машины.
+            let live = Set(settings.timerPresets.map(\.id))
+            if !Set(oldValue.timerPresets.map(\.id)).subtracting(live).isEmpty {
+                timers.keepOnly(presets: live)
+            }
             // Блок включили только что: список браузеров нужен раньше,
             // чем панель откроется, — иначе в ней на секунду пусто.
             if settings.browserPickerEnabled, !oldValue.browserPickerEnabled {
@@ -94,6 +112,10 @@ final class AppModel: ObservableObject {
     /// уже не добраться. Полное исчезновение — только по автоматике,
     /// и она возвращает значок сама.
     var menuBarItemVisible: Bool {
+        // Идущий таймер держит пункт на месте всегда. Сумм в нём нет —
+        // прятать нечего, — а исчезнуть он должен меньше всего именно
+        // во время звонка: там таймер и нужен.
+        if timerOnMenuBar { return true }
         guard let reason = privacyReason, reason != .manual else { return true }
         return settings.privacyAction == .mask
     }
@@ -180,6 +202,9 @@ final class AppModel: ObservableObject {
 
         if loaded.browserPickerEnabled { browsers.refresh() }
 
+        hotKeys.onTrigger = { [weak self] preset in self?.hotkeyPressed(preset) }
+        applyHotKeys()
+
         reminders.onOpenPanel = { [weak self] in self?.openPanel() }
         reminders.onMark = { [weak self] kind in self?.toggleMood(kind) }
         if remindByNotification { reminders.requestAccessIfNeeded() }
@@ -249,6 +274,159 @@ final class AppModel: ObservableObject {
         rescheduleReminders()
     }
 
+    // MARK: Таймер
+
+    /// Идущий таймер. `nil` — не запущен.
+    @Published private(set) var timerRun: TimerRun?
+
+    /// Журнал запусков: сколько раз какой таймер досчитали до конца.
+    /// Живёт отдельным файлом — счёт должен переживать перезапуск.
+    let timers = TimerLog()
+
+    /// Горячие клавиши таймеров.
+    private let hotKeys = HotKeyCenter()
+
+    /// До какого момента таймер держит тишину: конец захода плюс минута.
+    ///
+    /// Живёт дольше самого таймера намеренно. План напоминаний хранит только
+    /// будущее и пересчитывается заново; сними тишину в ту же секунду, когда
+    /// таймер кончился, — и сдвинутое напоминание исчезло бы из плана,
+    /// не прозвучав вовсе.
+    private var focusQuietUntil: Date?
+
+    /// Что показывать вместо счётчика прямо сейчас. `nil` — обычный вид.
+    var timerPhase: TimerPhase? {
+        guard let run = timerRun else { return nil }
+        let phase = TimerRules.phase(run, now: frozenNow ?? Date())
+        return phase == .gone ? nil : phase
+    }
+
+    /// Таймер занял строку меню.
+    var timerOnMenuBar: Bool { timerPhase != nil }
+
+    /// Настроенные таймеры, приведённые к правилам: файл настроек могли
+    /// править руками, а панель раскладывает плашки в одну строку.
+    var timerPresets: [TimerPreset] { TimerRules.normalized(settings.timerPresets) }
+
+    /// Сколько раз этот таймер сегодня досчитали до конца — подсказка
+    /// на плашке.
+    func timerLaunchesToday(_ preset: TimerPreset) -> Int {
+        let now = frozenNow ?? Date()
+        return timers.launches(preset: preset.id, on: DayStamp(now, in: settings.calendar))
+    }
+
+    /// Момент, от которого рисуется таймер.
+    ///
+    /// Обычно его даёт экран: панель перерисовывает полосу чаще, чем тикает
+    /// модель, и от этого заливка ползёт плавно, а не прыгает раз в секунду.
+    /// Во фрозен-времени (превью, зонды) выигрывает заморозка — иначе снимок
+    /// показывал бы не то состояние, ради которого его снимают.
+    func timerNow(_ screenNow: Date) -> Date { frozenNow ?? screenNow }
+
+    func startTimer(_ preset: TimerPreset) {
+        let now = frozenNow ?? Date()
+        timerRun = TimerRules.start(preset, now: now)
+        // Тишина ставится сразу на весь заход: напоминание о настроении,
+        // попавшее внутрь, уедет на конец, а не ударит в середину фокуса.
+        //
+        // Имя таймера в журнал не идёт — та же причина, что и с отметкой
+        // настроения: журнал дублируется в системный лог и попадает в отчёты
+        // диагностики, а имена человек придумывает себе сам.
+        extendQuiet(until: now + preset.duration + TimerRules.quietAfterFinish)
+        Log.info("таймер запущен на \(TimerRules.length(Int(preset.duration)))")
+        rescheduleTimer()
+        rescheduleReminders()
+    }
+
+    /// Нажали горячую клавишу таймера.
+    ///
+    /// Повторное нажатие того же сочетания останавливает свой таймер: клавиша,
+    /// которая умеет только запускать, оставляет человека без способа передумать,
+    /// не открывая панель. Чужое сочетание при идущем таймере не делает ничего —
+    /// в панели второй таймер тоже не запустить, и клавиша не должна уметь
+    /// больше, чем кнопка.
+    private func hotkeyPressed(_ presetID: UUID) {
+        if let run = timerRun {
+            if run.presetID == presetID {
+                stopTimer()
+            } else {
+                Log.info("горячая клавиша: другой таймер уже идёт, ничего не делаю")
+            }
+            return
+        }
+        guard let preset = timerPresets.first(where: { $0.id == presetID }) else { return }
+        startTimer(preset)
+    }
+
+    /// Перевесить горячие клавиши. Зовётся при запуске и на каждой правке
+    /// таймеров: сочетание могли назначить, снять или отдать другому таймеру.
+    private func applyHotKeys() {
+        hotKeys.apply(timerPresets, enabled: settings.timerEnabled)
+    }
+
+    func pauseTimer() {
+        guard let run = timerRun, !run.isPaused else { return }
+        timerRun = TimerRules.paused(run, now: frozenNow ?? Date())
+        Log.info("таймер на паузе")
+        rescheduleTimer()
+    }
+
+    func resumeTimer() {
+        guard let run = timerRun, run.isPaused else { return }
+        let resumed = TimerRules.resumed(run, now: frozenNow ?? Date())
+        timerRun = resumed
+        // Пауза сдвинула конец захода — вместе с ним едет и тишина.
+        extendQuiet(until: resumed.deadline + TimerRules.quietAfterFinish)
+        Log.info("таймер продолжен")
+        rescheduleTimer()
+        rescheduleReminders()
+    }
+
+    /// Ручная остановка. В отличие от досчитанного захода, в итог дня
+    /// не попадает: «сегодня 3 раза» — про доведённое до конца.
+    func stopTimer() {
+        guard timerRun != nil else { return }
+        timerRun = nil
+        // Заход кончился раньше срока, и держать тишину до его бывшего конца
+        // незачем: отложенное напоминание придёт через минуту.
+        focusQuietUntil = (frozenNow ?? Date()) + TimerRules.quietAfterFinish
+        Log.info("таймер остановлен вручную")
+        rescheduleTimer()
+        rescheduleReminders()
+    }
+
+    private func extendQuiet(until moment: Date) {
+        guard focusQuietUntil.map({ $0 < moment }) ?? true else { return }
+        focusQuietUntil = moment
+    }
+
+    /// Ход таймера: зовётся с каждым тиком, как и напоминания. Своего таймера
+    /// у него нет по той же причине — модель и так тикает, а второй источник
+    /// времени пришлось бы держать с ней в согласии руками.
+    private func advanceTimer() {
+        let now = frozenNow ?? Date()
+
+        if let run = timerRun, TimerRules.phase(run, now: now) == .gone {
+            timerRun = nil
+            // Компьютер мог проспать весь заход — засчитываем всё равно:
+            // отличить «спал» от «работал молча» нечем, а объяснять пропавший
+            // из счёта помидор пришлось бы человеку.
+            let done = TimerDone(preset: run.presetID, at: now,
+                                 day: DayStamp(now, in: settings.calendar),
+                                 name: run.name, seconds: Int(run.total.rounded()))
+            timers.append(done)
+            Log.info("таймер отработал (\(TimerRules.length(done.seconds)))")
+            rescheduleTimer()
+        }
+
+        // Тишину отпускаем не сразу: сдвинутое напоминание должно успеть
+        // прозвучать, а из плана оно исчезнет вместе с ней.
+        if let quiet = focusQuietUntil, now > quiet + PanelReminderRules.lateness {
+            focusQuietUntil = nil
+            rescheduleReminders()
+        }
+    }
+
     // MARK: Напоминания
 
     /// Напоминания имеют смысл только вместе с опросом: спрашивать про то,
@@ -313,7 +491,8 @@ final class AppModel: ObservableObject {
                     guard self.isExpectedWorkday(day) else { return nil }
                     return self.engine.shift(for: day)
                 },
-                marks: mood.entries.map(\.at)
+                marks: mood.entries.map(\.at),
+                focusEnd: focusQuietUntil
             )
         }
 
@@ -557,6 +736,18 @@ final class AppModel: ObservableObject {
     /// Во время смены — раз в секунду, иначе раз в полминуты:
     /// в 8 вечера деньги не капают, будить процесс каждую секунду незачем.
     private func desiredInterval() -> TimeInterval {
+        // Таймер главнее: он идёт секундами, а последние секунды мигает —
+        // с шагом в секунду мигание выглядело бы как подвисание.
+        if let run = timerRun {
+            switch TimerRules.phase(run, now: frozenNow ?? Date()) {
+            case .running(let remaining):
+                return remaining <= TimerRules.blinkSeconds ? 0.5 : 1
+            case .done:
+                return 0.5
+            case .paused, .gone:
+                break   // цифры стоят, торопиться некуда
+            }
+        }
         if panelIsOpen { return 1 }
         if snapshot.state == .working { return settings.decimals > 0 ? 1 : 5 }
         return 30
@@ -582,6 +773,7 @@ final class AppModel: ObservableObject {
         if remindersPlannedFor != DayStamp(snapshot.now, in: settings.calendar) {
             rescheduleReminders()
         }
+        advanceTimer()
         advancePanelReminder()
         if desiredInterval() != currentInterval { rescheduleTimer() }
     }
