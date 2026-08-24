@@ -796,12 +796,22 @@ private struct PrivacyTab: View {
             Section {
                 Toggle("Скрыть суммы прямо сейчас", isOn: $model.settings.hideAmount)
                 LabeledContent("Сейчас") {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(model.amountsHidden ? Color.orange : Color.green)
-                            .frame(width: 7, height: 7)
-                        Text(model.privacyReason?.title ?? "Ничего не обнаружено, суммы видны")
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(model.amountsHidden ? Color.orange : Color.green)
+                                .frame(width: 7, height: 7)
+                            Text(model.privacyReason?.title ?? "Ничего не обнаружено, суммы видны")
+                                .foregroundStyle(.secondary)
+                        }
+                        // Zoom в звонке — самый частый вопрос «почему спрятано»
+                        // и «почему не спрятано». Пусть на него отвечает
+                        // сама настройка, а не журнал.
+                        if !model.quietPrivacyCandidates.isEmpty {
+                            Text("\(model.quietPrivacyCandidates.joined(separator: ", ")) работает, но окна демонстрации нет")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -816,7 +826,7 @@ private struct PrivacyTab: View {
                 Text("Прятать автоматически")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Камера — самый широкий признак: она включается на любом видеозвонке, в Zoom, Meet, Teams, Telegram. Захват экрана определяется по процессам — их список ниже.")
+                    Text("Камера — самый широкий признак: она включается на любом видеозвонке, в Zoom, Meet, Teams, Telegram. Захват экрана ищется по процессам, но одного их присутствия мало: Zoom поднимает своего помощника при входе в конференцию и держит до конца. Поэтому у таких процессов ждут ещё и окно демонстрации — рамку вокруг показываемого экрана.")
                     Text("Спрятать окно от самого захвата macOS не позволяет: свойство sharingType с версии 15.4 игнорируется, публичной замены нет. Поэтому приложение убирает цифры само, заметив звонок или запись.")
                     if model.settings.privacyAction == .hide {
                         Label("Значок пропадёт из меню-бара целиком и вернётся, когда звонок закончится. Вручную скрытые суммы значок не убирают — иначе до настроек было бы не добраться.",
@@ -835,10 +845,16 @@ private struct PrivacyTab: View {
             Section {
                 DisclosureGroup("Процессы, означающие захват экрана") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(AppSettings.defaultCaptureProcesses.joined(separator: ", "))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                        VStack(alignment: .leading, spacing: 6) {
+                            LabeledContent("По рамке демонстрации") {
+                                Text(suspects(.sharingFrame)).textSelection(.enabled)
+                            }
+                            LabeledContent("По одному запуску") {
+                                Text(suspects(.presence)).textSelection(.enabled)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                         ForEach(Array(model.settings.privacyExtraProcesses.enumerated()), id: \.offset) { index, name in
                             HStack {
@@ -861,7 +877,7 @@ private struct PrivacyTab: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Совпадение по части имени, регистр не важен. Имя работающего процесса видно в Мониторинге системы.")
+                            Text("Совпадение по части имени, регистр не важен. Имя работающего процесса видно в Мониторинге системы. Свои процессы считаются по одному запуску — добавляйте те, что появляются именно на время показа.")
                             Text("Не добавляйте сюда программы удалённого доступа целиком (AnyDesk, TeamViewer, RuDesktop): их агенты работают в фоне постоянно, а не только во время сеанса. Процессы, уже работавшие в момент запуска Salary Flow, игнорируются — демонстрация экрана всегда начинается позже.")
                         }
                         .font(.caption)
@@ -872,6 +888,14 @@ private struct PrivacyTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Встроенные подозреваемые одним признаком — строкой для показа.
+    private func suspects(_ evidence: CaptureEvidence) -> String {
+        AppSettings.defaultCaptureSuspects
+            .filter { $0.evidence == evidence }
+            .map(\.needle)
+            .joined(separator: ", ")
     }
 
     private func addProcess() {

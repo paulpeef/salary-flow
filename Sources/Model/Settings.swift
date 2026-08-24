@@ -192,6 +192,34 @@ enum PrivacyAction: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Чем присутствие процесса отличается от настоящего захвата экрана.
+enum CaptureEvidence: Equatable {
+    /// Процесс живёт ровно столько, сколько идёт захват: `screencapture`
+    /// поднимается на снимок и тут же исчезает. Достаточно самого факта.
+    case presence
+
+    /// Процесс висит всё время звонка, показывают экран или нет, — значит,
+    /// сам по себе он ничего не доказывает. Нужен живой признак: окно
+    /// на экране. Zoom поднимает `CptHost` при входе в конференцию и держит
+    /// до её конца (замерено 24.08.2026: 25 минут, 0% процессора, ни одного
+    /// окна), а рамку вокруг показываемого экрана рисует только на время
+    /// демонстрации — вот она и есть окно.
+    case sharingFrame
+}
+
+/// Процесс, за которым следит монитор приватности, и признак, по которому
+/// его засчитывают.
+struct CaptureSuspect: Equatable {
+    /// Совпадение по части имени, регистр не важен.
+    let needle: String
+    let evidence: CaptureEvidence
+
+    init(_ needle: String, _ evidence: CaptureEvidence) {
+        self.needle = needle
+        self.evidence = evidence
+    }
+}
+
 /// Какую сумму показывает счётчик: за сегодня или за месяц.
 ///
 /// Выбор один на всё приложение: он же задаёт, какой блок в панели идёт первым
@@ -320,25 +348,31 @@ struct AppSettings: Codable, Equatable {
     /// Дополнительные имена процессов, добавленные пользователем.
     var privacyExtraProcesses: [String] = []
 
-    /// Процессы, чьё присутствие означает, что экран куда-то уходит.
+    /// Процессы, за которыми стоит следить, и чем каждый выдаёт настоящий захват.
     ///
-    /// Здесь только те, что появляются на время сеанса и исчезают после него.
-    /// Программы удалённого доступа (AnyDesk, TeamViewer, RuDesktop) сюда
-    /// сознательно не входят: их агенты висят в фоне круглосуточно, и счётчик
-    /// спрятался бы навсегда. Проверено на этой машине — `rudesktop_agent`
-    /// работает всё время, хотя никто никуда не подключён.
-    static let defaultCaptureProcesses = [
-        "CptHost",          // Zoom: демонстрация экрана
-        "zcscpthost",       // Zoom: он же в новых сборках
-        "screencapture",    // встроенные скриншоты и запись экрана
-        "screencaptureui",
-        "screensharingd"    // «Общий экран» macOS, поднимается на время сеанса
+    /// Здесь только те, что появляются на время сеанса. Программы удалённого
+    /// доступа (AnyDesk, TeamViewer, RuDesktop) сюда сознательно не входят:
+    /// их агенты висят в фоне круглосуточно, и счётчик спрятался бы навсегда.
+    /// Проверено на этой машине — `rudesktop_agent` работает всё время,
+    /// хотя никто никуда не подключён.
+    static let defaultCaptureSuspects: [CaptureSuspect] = [
+        CaptureSuspect("CptHost", .sharingFrame),   // Zoom: и демонстрация, и просто звонок
+        CaptureSuspect("zcscpthost", .sharingFrame), // Zoom: он же в новых сборках
+        CaptureSuspect("screencapture", .presence),  // встроенные скриншоты и запись экрана
+        CaptureSuspect("screencaptureui", .presence),
+        CaptureSuspect("screensharingd", .presence)  // «Общий экран» macOS, поднимается на время сеанса
     ]
 
-    var captureProcessNames: [String] {
-        AppSettings.defaultCaptureProcesses + privacyExtraProcesses
+    /// Полный список подозреваемых: встроенные плюс добавленные вручную.
+    ///
+    /// Свои процессы считаются по присутствию: человек добавляет их, посмотрев
+    /// в Мониторинг системы, что процесс появляется именно на время показа, —
+    /// требовать от них ещё и рамку значило бы молча не сработать.
+    var captureSuspects: [CaptureSuspect] {
+        AppSettings.defaultCaptureSuspects + privacyExtraProcesses
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+            .map { CaptureSuspect($0, .presence) }
     }
 
     init() {}

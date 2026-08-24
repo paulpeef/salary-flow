@@ -52,6 +52,8 @@ final class AppModel: ObservableObject {
 
     /// Что нашёл монитор приватности: камера, захват экрана или ничего.
     @Published private(set) var detectedPrivacy: PrivacyReason?
+    /// Кандидаты на захват экрана, которые работают, но экран не показывают.
+    @Published private(set) var quietPrivacyCandidates: [String] = []
     /// «Показать всё равно» — временно, до конца звонка.
     @Published var temporaryReveal = false
 
@@ -94,6 +96,14 @@ final class AppModel: ObservableObject {
     var menuBarItemVisible: Bool {
         guard let reason = privacyReason, reason != .manual else { return true }
         return settings.privacyAction == .mask
+    }
+
+    /// Подставить кандидатов для оффскрин-рендера: живой Zoom в превью
+    /// не поднимешь, а увидеть строку надо. Работает только там, где нет
+    /// бандла, — в самом приложении вызов ничего не делает.
+    func overridePrivacyCandidatesForPreview(_ names: [String]) {
+        guard Bundle.main.bundleIdentifier == nil else { return }
+        quietPrivacyCandidates = names
     }
 
     /// Замороженное время для предпросмотра и отладки.
@@ -144,7 +154,17 @@ final class AppModel: ObservableObject {
             // Звонок кончился — временное «показать всё равно» тоже сбрасываем.
             if reason == nil { self.temporaryReveal = false }
         }
+        privacy.onQuietChange = { [weak self] names in
+            self?.quietPrivacyCandidates = names
+        }
         detectedPrivacy = privacy.reason
+        quietPrivacyCandidates = privacy.quietCandidates
+        // Первый опрос проходит до того, как повешен обработчик смены, — иначе
+        // приложение, запущенное посреди демонстрации экрана, прячет суммы
+        // молча, и в журнале об этом нет ни строки.
+        if let reason = detectedPrivacy {
+            Log.info("приватный режим включён уже при запуске: \(reason.title)")
+        }
 
         // Приложение могли перенести или удалить агент запуска руками —
         // приводим систему в соответствие с настройкой.

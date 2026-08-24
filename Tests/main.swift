@@ -291,47 +291,111 @@ do {
           nearly(snap.monthEarned, (210_000.0 / 21.0) * 10), "получено \(snap.monthEarned)")
 }
 
-// MARK: - Приватность: список процессов
+// MARK: - Приватность: чем захват экрана отличается от работающего процесса
 
 do {
-    let names = ProcessList.names()
-    check("список процессов не пустой", names.count > 10, "получено \(names.count)")
-    check("в списке есть launchd", names.contains { $0.lowercased() == "launchd" },
-          "первые пять: \(names.prefix(5).joined(separator: ", "))")
+    let all = ProcessList.all()
+    check("список процессов не пустой", all.count > 10, "получено \(all.count)")
+    check("в списке есть launchd", all.contains { $0.name.lowercased() == "launchd" },
+          "первые пять: \(all.prefix(5).map(\.name).joined(separator: ", "))")
+    // Номер процесса важнее имени: по нему спрашивают окна. Проверяем на том,
+    // что в macOS неизменно, — launchd всегда первый. (Ноль тоже занят,
+    // это kernel_task, поэтому «номер больше нуля» проверять нельзя.)
+    check("номера процессов настоящие: launchd под номером 1",
+          all.contains { $0.name == "launchd" && $0.pid == 1 })
 
-    check("несуществующий процесс не находится",
-          ProcessList.firstMatch(["ЗаведомоНетТакогоПроцесса12345"]) == nil)
-
-    // Ищем по куску имени и без учёта регистра — как это делает монитор.
-    check("совпадение по части имени и в другом регистре",
-          ProcessList.firstMatch(["LAUNCHD"]) != nil)
-
-    check("пустой список ничего не находит",
-          ProcessList.firstMatch([]) == nil)
-
-    // Дальше — на выдуманном списке процессов, чтобы результат не зависел
+    // Дальше — на выдуманных процессах и окнах, чтобы результат не зависел
     // от того, что реально запущено на машине во время прогона.
-    let fake = ["launchd", "Finder", "CptHost", "rudesktop_agent"]
+    let zoomIdle = [RunningProcess(pid: 10, name: "launchd"),
+                    RunningProcess(pid: 20, name: "zoom.us"),
+                    RunningProcess(pid: 30, name: "CptHost")]
+    let suspects = AppSettings.defaultCaptureSuspects
 
-    check("демонстрация экрана в Zoom ловится",
-          ProcessList.firstMatch(AppSettings.defaultCaptureProcesses, in: fake) == "CptHost")
+    // Главный случай, ради которого всё и переписано: Zoom поднимает CptHost
+    // при входе в конференцию и держит до конца, показывают экран или нет.
+    let idle = CaptureDetector.verdict(suspects: suspects, running: zoomIdle,
+                                       windowOwners: [20])
+    check("звонок без демонстрации экрана не считается захватом", idle.capture == nil,
+          "засчитан \(idle.capture?.process ?? "—")")
+    check("молчащий кандидат назван — журналу есть что записать",
+          idle.quiet == ["CptHost"], "получено \(idle.quiet)")
 
-    check("фоновый агент удалёнки не считается захватом экрана",
-          ProcessList.firstMatch(AppSettings.defaultCaptureProcesses,
-                                 in: ["launchd", "rudesktop_agent", "AnyDesk"]) == nil,
+    // Во время показа CptHost рисует рамку вокруг показываемого экрана —
+    // это его окно, и оно единственное надёжное отличие.
+    let sharing = CaptureDetector.verdict(suspects: suspects, running: zoomIdle,
+                                          windowOwners: [20, 30])
+    check("демонстрация экрана в Zoom ловится по рамке",
+          sharing.capture == CaptureHit(process: "CptHost", evidence: .sharingFrame))
+    check("во время захвата молчащих кандидатов нет", sharing.quiet.isEmpty)
+
+    // Скриншот — событие мгновенное, ждать от него окна бессмысленно.
+    let shot = CaptureDetector.verdict(
+        suspects: suspects,
+        running: [RunningProcess(pid: 10, name: "launchd"),
+                  RunningProcess(pid: 40, name: "screencapture")],
+        windowOwners: [])
+    check("снимок экрана ловится по одному присутствию процесса",
+          shot.capture == CaptureHit(process: "screencapture", evidence: .presence))
+
+    let remote = CaptureDetector.verdict(
+        suspects: suspects,
+        running: [RunningProcess(pid: 10, name: "launchd"),
+                  RunningProcess(pid: 50, name: "rudesktop_agent"),
+                  RunningProcess(pid: 51, name: "AnyDesk")],
+        windowOwners: [50, 51])
+    check("фоновый агент удалёнки не считается захватом экрана", remote.capture == nil,
           "в список по умолчанию попал постоянно работающий демон")
 
-    check("процесс, работавший ещё до запуска приложения, игнорируется",
-          ProcessList.firstMatch(AppSettings.defaultCaptureProcesses,
-                                 in: fake, ignoring: ["CptHost"]) == nil)
+    let atStartup = CaptureDetector.verdict(
+        suspects: suspects,
+        running: [RunningProcess(pid: 40, name: "screencapture")],
+        windowOwners: [], ignoring: ["screencapture"])
+    check("процесс-присутствие, работавший ещё до запуска приложения, игнорируется",
+          atStartup.capture == nil)
 
-    check("тот же процесс засчитывается, если его не было при старте",
-          ProcessList.firstMatch(AppSettings.defaultCaptureProcesses,
-                                 in: fake, ignoring: ["Finder"]) == "CptHost")
+    // А вот к рамке отсечка по старту не применяется: приложение могли
+    // перезапустить посреди конференции, и тогда CptHost был бы «старым»,
+    // хотя демонстрация ещё впереди.
+    let restarted = CaptureDetector.verdict(suspects: suspects, running: zoomIdle,
+                                            windowOwners: [30], ignoring: ["CptHost"])
+    check("рамку засчитывают даже у процесса, работавшего при старте",
+          restarted.capture?.process == "CptHost")
 
-    check("свои процессы добавляются к встроенным",
-          ProcessList.firstMatch(AppSettings.defaultCaptureProcesses + ["webex"],
-                                 in: ["launchd", "WebexHelper"]) == "WebexHelper")
+    check("свои процессы добавляются к встроенным и считаются по присутствию",
+          CaptureDetector.verdict(
+              suspects: suspects + [CaptureSuspect("webex", .presence)],
+              running: [RunningProcess(pid: 10, name: "launchd"),
+                        RunningProcess(pid: 60, name: "WebexHelper")],
+              windowOwners: []).capture == CaptureHit(process: "WebexHelper", evidence: .presence))
+
+    // Опрос идёт каждые три секунды: без запущенного Zoom обходить все окна
+    // системы незачем, и монитор этого не делает.
+    check("окна не спрашивают, когда по рамке ловить некого",
+          !CaptureDetector.needsWindowList(
+              suspects: suspects,
+              running: [RunningProcess(pid: 10, name: "launchd"),
+                        RunningProcess(pid: 40, name: "screencapture")]))
+    check("окна спрашивают, когда работает Zoom",
+          CaptureDetector.needsWindowList(suspects: suspects, running: zoomIdle))
+
+    check("пустой список подозреваемых ничего не находит",
+          CaptureDetector.verdict(suspects: [], running: zoomIdle, windowOwners: [30]).capture == nil)
+    check("пустое имя в списке ничего не ловит",
+          CaptureDetector.verdict(suspects: [CaptureSuspect("  ", .presence)],
+                                  running: zoomIdle, windowOwners: []).capture == nil)
+
+    var withOwn = baseSettings()
+    withOwn.privacyExtraProcesses = ["Webex", "  ", "obs"]
+    check("свои процессы приходят в список подозреваемых по присутствию",
+          withOwn.captureSuspects.suffix(2) == [CaptureSuspect("Webex", .presence),
+                                                CaptureSuspect("obs", .presence)],
+          "получено \(withOwn.captureSuspects.suffix(2))")
+
+    // Список окон спрашивается у системы без всяких разрешений: нам нужен
+    // только владелец окна, а скрыты без права на запись экрана заголовки.
+    let owners = WindowCensus.onscreenOwners()
+    check("список владельцев окон читается без разрешения на запись экрана",
+          !owners.isEmpty, "получено \(owners.count)")
 
     // Проверяем сам механизм опроса камер: он не должен падать и должен
     // отвечать за разумное время, даже если камер несколько.

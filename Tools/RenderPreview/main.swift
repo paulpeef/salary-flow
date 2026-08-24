@@ -238,6 +238,18 @@ MainActor.assumeIsolated {
                      to: "\(outDir)/settings-\(name).png")
     }
 
+    // Отдельно — приватность в момент звонка Zoom без демонстрации экрана.
+    // Ровно на этом состоянии приложение полгода прятало суммы зря: процесс
+    // CptHost работает всю конференцию, а показывают экран или нет — не по нему.
+    // Строка должна говорить об этом прямо, поэтому её видно на снимке.
+    let zoomCall = makeModel { $0.privacyOnCapture = true }
+    zoomCall.settingsSection = .privacy
+    zoomCall.overrideNow(moment(2026, 8, 12, 14, 37))
+    zoomCall.overridePrivacyCandidatesForPreview(["CptHost"])
+    renderWindow(SettingsView(model: zoomCall),
+                 size: settingsSize,
+                 to: "\(outDir)/settings-privacy-zoom.png")
+
     // Статистика настроения не влезает в окно целиком: страница прокручивается,
     // а проверить надо все графики и выводы сразу. Поэтому второй снимок —
     // сам раздел без окна, во всю высоту (ширина как у правой колонки: 700−190).
