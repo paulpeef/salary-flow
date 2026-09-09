@@ -48,6 +48,12 @@ final class AppModel: ObservableObject {
             if !Set(oldValue.timerPresets.map(\.id)).subtracting(live).isEmpty {
                 timers.keepOnly(presets: live)
             }
+            // Блок заготовок выключили — отметке «скопировано» больше негде
+            // гаснуть, а висеть до следующего включения она не должна.
+            if !settings.snippetsEnabled, oldValue.snippetsEnabled {
+                copyFlash?.cancel()
+                copiedSnippet = nil
+            }
             // Блок включили только что: список браузеров нужен раньше,
             // чем панель откроется, — иначе в ней на секунду пусто.
             if settings.browserPickerEnabled, !oldValue.browserPickerEnabled {
@@ -427,11 +433,181 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Заготовки под рукой
+
+    /// Заготовки, приведённые к правилам: файл настроек правят руками
+    /// и привозят с другой машины.
+    var snippets: [Snippet] { SnippetRules.normalized(settings.snippets) }
+
+    /// Плашка, которая прямо сейчас показывает «скопировано». `nil` — ни одна.
+    ///
+    /// Отметка нужна потому, что копирование не видно ничем: буфер обмена
+    /// молчит, панель не закрывается, а вставлять человек идёт в другое окно.
+    /// Без ответа плашки нажатие выглядит как несработавшее.
+    @Published private(set) var copiedSnippet: UUID?
+
+    /// Снимает отметку через положенные полторы секунды. Ссылку держим, чтобы
+    /// нажатие на вторую заготовку не гасило её отметку по таймеру от первой.
+    private var copyFlash: Task<Void, Never>?
+
+    /// Положить заготовку в буфер обмена.
+    ///
+    /// Буфер обмена — вещь общая, и трогаем мы её только по нажатию: сам
+    /// по себе счётчик в него не пишет и не заглядывает никогда.
+    func copySnippet(_ snippet: Snippet) {
+        let text = snippet.payload
+        // Пустую заготовку в панели и нажать нельзя, но проверка здесь всё
+        // равно нужна: чужой буфер обмена нельзя чистить впустую — в нём
+        // лежит то, что человек копировал до этого.
+        guard !text.isEmpty else { return }
+
+        // Один элемент с несколькими представлениями — так буфер и устроен:
+        // программа-получатель берёт то, что понимает. RTF читают родные
+        // программы, HTML — те, что на Electron (Slack и подобные), а строка
+        // остаётся для полей, где форматирования не бывает вовсе.
+        let item = NSPasteboardItem()
+        if let rich = snippet.rich { item.setData(rich, forType: .rtf) }
+        // HTML дословно, если он есть: именно его читают программы на Electron,
+        // и пересобранный из RTF он был бы уже не тем, что положил источник.
+        // Своего HTML нет только у заготовок, взятых из родных программ, —
+        // для них он и считается из RTF.
+        if let html = snippet.html ?? snippet.rich.flatMap(SnippetRules.htmlData(fromRTF:)) {
+            item.setData(html, forType: .html)
+        }
+        item.setString(text, forType: .string)
+
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.writeObjects([item])
+
+        // В журнал не идут ни текст, ни имя: журнал дублируется в системный
+        // лог и уезжает в отчёты диагностики, а в заготовке лежит личное.
+        // Та же причина, по которой туда не пишется имя таймера.
+        Log.info("заготовка скопирована в буфер обмена (\(text.count) знаков"
+                 + (snippet.isRich ? ", с форматированием)" : ")"))
+
+        copiedSnippet = snippet.id
+        copyFlash?.cancel()
+        copyFlash = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(SnippetRules.flashSeconds * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.copiedSnippet == snippet.id else { return }
+            self.copiedSnippet = nil
+        }
+    }
+
+    /// Взять в заготовку то, что сейчас лежит в буфере обмена, — вместе
+    /// с форматированием, если оно там есть.
+    ///
+    /// Это единственный способ завести заготовку со ссылкой внутри слова:
+    /// своего редактора с форматированием у настроек нет и не будет — его
+    /// пришлось бы придумывать целиком, а нужное уже набрано в той программе,
+    /// откуда текст и копируют.
+    @discardableResult
+    func captureSnippetFromClipboard(into id: UUID) -> SnippetCapture {
+        let board = NSPasteboard.general
+        // Список типов — в журнал: чем именно ответила программа-источник,
+        // иначе «взялось простым текстом» не с чем сверить. Это имена типов
+        // (`public.html` и подобные), а не содержимое буфера.
+        Log.info("буфер обмена отдал типы: "
+                 + (board.types?.map(\.rawValue).joined(separator: ", ") ?? "ни одного"))
+
+        let capture = SnippetRules.capture(rtf: SnippetRules.clipboardRTF(board),
+                                           html: SnippetRules.clipboardHTML(board),
+                                           plain: board.string(forType: .string))
+
+        guard let index = settings.snippets.firstIndex(where: { $0.id == id }) else { return capture }
+        switch capture {
+        case .rich(let text, let rtf, let html):
+            settings.snippets[index].text = text
+            settings.snippets[index].rich = rtf
+            settings.snippets[index].html = html
+        case .plain(let text), .tooBig(let text):
+            settings.snippets[index].text = text
+            // Прежнее форматирование снимается вместе с прежним текстом:
+            // разметка от одного куска поверх другого — это не «сохранили
+            // оформление», а враньё при вставке.
+            settings.snippets[index].rich = nil
+            settings.snippets[index].html = nil
+        case .empty:
+            break
+        }
+
+        // В журнале только исход — ни текста, ни разметки: см. `copySnippet`.
+        Log.info("заготовка взята из буфера обмена — \(SnippetRules.captureNote(capture).lowercased())")
+        return capture
+    }
+
+    /// Зажечь отметку «скопировано» для оффскрин-рендера: класть что-то
+    /// в живой буфер обмена ради снимка нельзя — это чужая вещь. Работает
+    /// только там, где нет бандла, как и подстановка кандидатов приватности.
+    func markSnippetCopiedForPreview(_ id: UUID) {
+        guard Bundle.main.bundleIdentifier == nil else { return }
+        copiedSnippet = id
+    }
+
     // MARK: Напоминания
 
     /// Напоминания имеют смысл только вместе с опросом: спрашивать про то,
     /// чего в панели нет, было бы издевательством.
     var remindersWanted: Bool { settings.moodEnabled && settings.moodRemindersEnabled }
+
+    /// Времена, которые приложение расставило бы само по нынешней смене.
+    var defaultMoodReminderTimes: [TimeOfDay] {
+        MoodReminderRules.defaultTimes(start: settings.dayStart, end: settings.dayEnd)
+    }
+
+    /// Стоят ли напоминания там, куда их поставил бы сам расчёт по смене.
+    /// По этому гаснет кнопка «Расставить по графику»: предлагать сделать
+    /// то, что уже сделано, — обманывать ожидание.
+    var moodRemindersFollowShift: Bool {
+        settings.moodReminderTimes.map(\.time) == defaultMoodReminderTimes
+    }
+
+    /// Включить или выключить напоминания.
+    ///
+    /// Включение всегда ставит времена по умолчанию: выключенный тумблер
+    /// список за собой не хранит, и возвращаться человеку в любом случае
+    /// некуда. Заодно это единственный способ вернуть расчёт по смене,
+    /// не вспоминая, какие времена там были.
+    func setMoodReminders(enabled: Bool) {
+        applyMoodReminders(MoodReminderRules.settled(
+            enabled: enabled, times: [], fillEmpty: true, defaults: defaultMoodReminderTimes))
+    }
+
+    /// Вернуть времена, посчитанные по нынешней смене. То же самое, что
+    /// выключить тумблер и включить обратно, только без промежутка,
+    /// в котором напоминаний нет вовсе.
+    func resetMoodReminderTimes() { setMoodReminders(enabled: true) }
+
+    /// Ещё одно напоминание, если пять ещё не набралось.
+    func addMoodReminder() {
+        var times = settings.moodReminderTimes
+        guard MoodReminderRules.canAdd(times) else { return }
+        times.append(MoodReminderTime(MoodReminderRules.timeForNew(after: times)))
+        applyMoodReminders(MoodReminderRules.settled(
+            enabled: true, times: times, fillEmpty: false, defaults: defaultMoodReminderTimes))
+    }
+
+    /// Убрать напоминание. Последнее убранное гасит и сам тумблер: включённые
+    /// напоминания без единого времени — обещание, которого приложение
+    /// не выполнит, и молчащий тумблер выглядел бы поломкой.
+    func removeMoodReminder(_ id: UUID) {
+        var times = settings.moodReminderTimes
+        times.removeAll { $0.id == id }
+        applyMoodReminders(MoodReminderRules.settled(
+            enabled: settings.moodRemindersEnabled, times: times,
+            fillEmpty: false, defaults: defaultMoodReminderTimes))
+    }
+
+    /// Тумблер и список пишутся одним присваиванием, а не двумя подряд:
+    /// между двумя настройки постояли бы в состоянии, которого быть не должно,
+    /// и `didSet` успел бы разложить по нему системные сроки.
+    private func applyMoodReminders(_ result: (enabled: Bool, times: [MoodReminderTime])) {
+        var next = settings
+        next.moodRemindersEnabled = result.enabled
+        next.moodReminderTimes = result.times
+        settings = next
+    }
 
     /// Напоминать уведомлением. Иначе приложение раскрывает панель само,
     /// и системе уведомлений в этом деле нечего делать вовсе: ни разрешения,
@@ -487,6 +663,7 @@ final class AppModel: ObservableObject {
             plan = MoodReminderRules.plan(
                 now: now,
                 calendar: settings.calendar,
+                times: settings.moodReminderTimes.map(\.time),
                 shift: { day in
                     guard self.isExpectedWorkday(day) else { return nil }
                     return self.engine.shift(for: day)

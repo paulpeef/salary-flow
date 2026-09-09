@@ -36,6 +36,12 @@ struct PanelView: View {
             if model.settings.timerEnabled {
                 TimerBlock(model: model)
             }
+            // Под таймером и по той же причине: это действие, а не вопрос.
+            // Ниже таймера, потому что таймер привязан ко времени — его
+            // запускают в начале звонка, а ссылку копируют когда придётся.
+            if model.settings.snippetsEnabled {
+                SnippetBlock(model: model)
+            }
             if model.settings.moodEnabled {
                 MoodBlock(model: model, log: model.mood)
             }
@@ -57,7 +63,8 @@ struct PanelView: View {
         // изменение размера должно происходить одним шагом, иначе окно
         // меню-бара перерисовывает подложку не в такт с содержимым.
         .transaction { $0.animation = nil }
-        .environment(\.locale, Locale(identifier: "ru_RU"))
+        // Русский язык, но часы — машинные: см. `Fmt.uiLocale`.
+        .environment(\.locale, Fmt.uiLocale)
         // Плавное перекатывание цифр — ради него всё и затевалось.
         .animation(.snappy(duration: 0.25), value: s.monthEarned)
         .onAppear { model.panelIsOpen = true }

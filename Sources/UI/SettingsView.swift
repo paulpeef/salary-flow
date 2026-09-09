@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
-    case money, schedule, specialDays, counter, privacy, mood, timer, browser, app
+    case money, schedule, specialDays, counter, privacy, mood, timer, snippets, browser, app
 
     var id: Int { rawValue }
 
@@ -16,6 +16,7 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
         case .privacy: return "Приватность"
         case .mood: return "Настроение"
         case .timer: return "Таймер"
+        case .snippets: return "Под рукой"
         case .browser: return "Браузер"
         case .app: return "Приложение"
         }
@@ -30,6 +31,7 @@ enum SettingsSection: Int, CaseIterable, Identifiable, Hashable {
         case .privacy: return "eye.slash"
         case .mood: return "face.smiling"
         case .timer: return "timer"
+        case .snippets: return "doc.on.clipboard"
         case .browser: return "globe"
         case .app: return "gearshape"
         }
@@ -65,7 +67,7 @@ enum SettingsGroup: Int, CaseIterable, Identifiable {
         switch self {
         case .calculation: return [.money, .schedule, .specialDays]
         case .display: return [.counter, .privacy]
-        case .rest: return [.mood, .timer, .browser, .app]
+        case .rest: return [.mood, .timer, .snippets, .browser, .app]
         }
     }
 }
@@ -109,9 +111,11 @@ struct SettingsView: View {
                 .background(.background)
         }
         .frame(width: 700, height: 520)
-        // Интерфейс русский, поэтому время показываем в 24-часовом формате,
-        // а даты как 24.08.2026 — независимо от языка системы.
-        .environment(\.locale, Locale(identifier: "ru_RU"))
+        // Интерфейс русский в любом регионе: даты как 24.08.2026, месяцы
+        // по-русски. А часы — те, что стоят на машине: в поле выбора времени
+        // напоминания человек ждёт ровно тот формат, который видит в строке
+        // меню, и спорить с ним приложению не за чем.
+        .environment(\.locale, Fmt.uiLocale)
         .onDisappear {
             // Возвращаем приложение в режим «только меню-бар»: иконка в доке
             // нужна была лишь для того, чтобы окно настроек вышло вперёд.
@@ -129,6 +133,7 @@ struct SettingsView: View {
         case .privacy: PrivacyTab(model: model)
         case .mood: MoodStatsView(model: model, log: model.mood, reminders: model.reminders)
         case .timer: TimerTab(model: model)
+        case .snippets: SnippetsTab(model: model)
         case .browser: BrowserTab(model: model, browsers: model.browsers)
         case .app: AppTab(model: model)
         }

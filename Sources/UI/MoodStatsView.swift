@@ -391,19 +391,23 @@ struct MoodStatsView: View {
     private var surveySection: some View {
         Section {
             Toggle("Спрашивать в панели", isOn: $model.settings.moodEnabled)
-            Toggle("Напоминать отметить настроение", isOn: $model.settings.moodRemindersEnabled)
+            // Тумблер напоминаний ходит не прямым связыванием: включение
+            // ставит времена по умолчанию, и делать это надо одним движением
+            // вместе с самим тумблером.
+            Toggle("Напоминать отметить настроение", isOn: remindersEnabled)
                 .disabled(!model.settings.moodEnabled)
             if model.remindersWanted {
                 Picker("Чем напоминать", selection: $model.settings.moodReminderStyle) {
                     ForEach(MoodReminderStyle.allCases) { Text($0.title).tag($0) }
                 }
+                reminderTimes
                 reminderStatus
             }
         } header: {
             Text("Опрос")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Три напоминания за смену: время считается по рабочему дню и едет само, когда меняется график. В выходные, праздники и отпуск напоминаний нет; если вы только что отметились, ближайшее пропускается.")
+                Text("До \(MoodReminderRules.maxPerDay) напоминаний за день, время — ваше: при включении расставляются три по рабочему дню, дальше их можно двигать, добавлять и убирать. Часы показываются так, как настроены на этом компьютере, а считаются по рабочему поясу из «Графика». В выходные, праздники и отпуск напоминаний нет; если вы только что отметились, ближайшее пропускается. Убрали последнее — тумблер гаснет сам.")
                 switch model.settings.moodReminderStyle {
                 case .notification:
                     Text("Отвечать можно прямо из уведомления или нажать на него — раскроется панель.")
@@ -419,9 +423,86 @@ struct MoodStatsView: View {
         .onAppear { reminders.refreshAccess() }
     }
 
-    /// Когда именно придут напоминания. Показывается всегда, а не прячется
-    /// в подсказку: «три раза в день» без времени — чёрный ящик, и первое
-    /// уведомление станет неожиданностью.
+    private var remindersEnabled: Binding<Bool> {
+        Binding(get: { model.settings.moodRemindersEnabled },
+                set: { model.setMoodReminders(enabled: $0) })
+    }
+
+    /// Во сколько напоминать.
+    ///
+    /// Строки стоят прямо в разделе, а не за кнопкой «настроить»: их не больше
+    /// пяти, и весь смысл правки — увидеть все времена разом, а не открывать
+    /// ради одной цифры отдельное окно.
+    @ViewBuilder
+    private var reminderTimes: some View {
+        ForEach($model.settings.moodReminderTimes) { $item in
+            HStack {
+                DatePicker("Напоминание",
+                           selection: wallClock($item),
+                           displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                Spacer(minLength: 8)
+                Button {
+                    model.removeMoodReminder(item.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Убрать это напоминание")
+            }
+        }
+
+        HStack {
+            Button {
+                model.addMoodReminder()
+            } label: {
+                Label("Добавить напоминание", systemImage: "plus")
+            }
+            .disabled(!MoodReminderRules.canAdd(model.settings.moodReminderTimes))
+
+            Spacer(minLength: 8)
+
+            // График меняют реже, чем время напоминаний, но когда меняют —
+            // напоминания остаются там, где стояли: они больше не считаются
+            // по смене сами. Кнопка и есть тот самый расчёт по смене,
+            // до которого иначе пришлось бы добираться выключением тумблера.
+            Button("Расставить по графику") { model.resetMoodReminderTimes() }
+                .disabled(model.moodRemindersFollowShift)
+                .help("Вернуть времена, посчитанные по рабочему дню: \(defaultTimesHint)")
+        }
+    }
+
+    private var defaultTimesHint: String {
+        Fmt.list(model.defaultMoodReminderTimes.map(Fmt.timeOfDay))
+    }
+
+    /// Время суток в поле выбора и обратно.
+    ///
+    /// Считается в календаре машины, а не в рабочем поясе из настроек: поле
+    /// показывает время так, как показывает его сама система, и час, собранный
+    /// в чужом поясе, приехал бы в него сдвинутым. Сама дата здесь ничего
+    /// не значит — в настройках лежат только часы и минуты.
+    private func wallClock(_ item: Binding<MoodReminderTime>) -> Binding<Date> {
+        Binding(
+            get: {
+                let calendar = Calendar.current
+                let midnight = calendar.startOfDay(for: Date())
+                return calendar.date(bySettingHour: item.wrappedValue.time.hour,
+                                     minute: item.wrappedValue.time.minute,
+                                     second: 0,
+                                     of: midnight) ?? midnight
+            },
+            set: { date in
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+                item.wrappedValue.time = TimeOfDay(hour: parts.hour ?? MoodReminderRules.noon.hour,
+                                                   minute: parts.minute ?? MoodReminderRules.noon.minute)
+            })
+    }
+
+    /// Что из выбранного придёт ближайшим. Строка стоит всегда, а не только
+    /// при неполадке: времена над ней — расписание на любой рабочий день,
+    /// а здесь видно, что осталось на сегодня и когда ждать следующего,
+    /// если сегодня уже нечего.
     @ViewBuilder
     private var reminderStatus: some View {
         // Панель раскрывает само приложение — системе уведомлений тут делать
@@ -470,8 +551,8 @@ struct MoodStatsView: View {
     }
 
     /// Когда именно придёт следующее напоминание. Нужно в обоих способах:
-    /// «три раза в день» без времени — чёрный ящик, и первое напоминание,
-    /// уведомлением оно придёт или раскрытой панелью, станет неожиданностью.
+    /// выходные, праздники, отпуск и свежая отметка выкидывают сроки из плана,
+    /// и по одному списку времён не понять, что будет на самом деле.
     private var reminderScheduleRow: some View {
         LabeledContent("Напомню") {
             Text(reminderSchedule)

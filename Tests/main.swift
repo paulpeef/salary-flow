@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // Простой прогон без XCTest: тесты должны запускаться одной командой
@@ -1136,8 +1137,12 @@ do {
         return e.shift(for: day)
     }
 
+    // Времена — те же, что подставит включённый тумблер: 11:00, 14:30 и 18:15.
+    let byShift = MoodReminderRules.defaultTimes(start: s.dayStart, end: s.dayEnd)
+
     let now = moment(2026, 8, 12, 9, 0)          // среда, смена ещё не началась
-    let plan = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift, marks: [])
+    let plan = MoodReminderRules.plan(now: now, calendar: calendar, times: byShift,
+                                      shift: shift, marks: [])
 
     check("план не пустой", !plan.isEmpty)
     check("прошедших моментов в плане нет", plan.allSatisfy { $0 > now })
@@ -1153,13 +1158,15 @@ do {
 
     // Середина смены: то, что уже прошло, в план не попадает.
     let midday = MoodReminderRules.plan(now: moment(2026, 8, 12, 15, 0),
-                                        calendar: calendar, shift: shift, marks: [])
+                                        calendar: calendar, times: byShift,
+                                        shift: shift, marks: [])
     check("на сегодня осталось одно напоминание",
           midday.filter { DayStamp($0, in: calendar) == DayStamp(year: 2026, month: 8, day: 12) }.count == 1,
           "получено \(midday.prefix(3).map { Fmt.clock($0, timeZone: moscow) })")
 
     // Свежая отметка снимает ближайшее: человек только что ответил на этот вопрос.
-    let justMarked = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
+    let justMarked = MoodReminderRules.plan(now: now, calendar: calendar, times: byShift,
+                                            shift: shift,
                                             marks: [moment(2026, 8, 12, 10, 50)])
     check("свежая отметка снимает ближайшее напоминание",
           justMarked.count == plan.count - 1,
@@ -1167,7 +1174,8 @@ do {
     check("остальные напоминания остаются",
           justMarked.contains(moment(2026, 8, 12, 14, 30)))
 
-    let old = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
+    let old = MoodReminderRules.plan(now: now, calendar: calendar, times: byShift,
+                                     shift: shift,
                                      marks: [moment(2026, 8, 10, 12, 0)])
     check("старая отметка на план не влияет", old.count == plan.count)
 
@@ -1176,7 +1184,7 @@ do {
     fired.hasEmploymentEnd = true
     fired.employmentEnd = DayStamp(year: 2026, month: 8, day: 11)
     let afterEnd = Engine(settings: fired)
-    let empty = MoodReminderRules.plan(now: now, calendar: calendar, shift: { day in
+    let empty = MoodReminderRules.plan(now: now, calendar: calendar, times: byShift, shift: { day in
         guard afterEnd.state(of: day, now: day.startOfDay(in: calendar)).isWorkday else { return nil }
         return afterEnd.shift(for: day)
     }, marks: [])
@@ -1192,6 +1200,220 @@ do {
     let old = decodeSettings("{\"schemaVersion\":2,\"monthlyAmount\":100000}")
     check("старый файл оставляет напоминания включёнными", old?.moodRemindersEnabled == true)
     check("горизонт планирования — неделя", MoodReminderRules.horizonDays == 7)
+}
+
+// MARK: - Напоминания: время задаёт человек
+
+do {
+    let day = MoodReminderRules.defaultTimes(start: TimeOfDay(hour: 10, minute: 0),
+                                             end: TimeOfDay(hour: 19, minute: 0))
+    check("по умолчанию три напоминания", day.count == MoodReminderRules.perDay,
+          "получено \(day.map(Fmt.timeOfDay))")
+    check("времена по умолчанию — те же, что считались по смене",
+          day == [TimeOfDay(hour: 11, minute: 0),
+                  TimeOfDay(hour: 14, minute: 30),
+                  TimeOfDay(hour: 18, minute: 15)],
+          "получено \(day.map(Fmt.timeOfDay))")
+
+    // Ночная смена: времена по умолчанию переваливают за полночь.
+    let night = MoodReminderRules.defaultTimes(start: TimeOfDay(hour: 22, minute: 0),
+                                               end: TimeOfDay(hour: 6, minute: 0))
+    check("на ночной смене времена уезжают за полночь",
+          night.contains { $0.hour < 12 }, "получено \(night.map(Fmt.timeOfDay))")
+
+    // Получасовая смена: три точки ещё умещаются, но с зазором в пять минут.
+    let half = MoodReminderRules.defaultTimes(start: TimeOfDay(hour: 10, minute: 0),
+                                              end: TimeOfDay(hour: 10, minute: 30))
+    check("на получасовой смене напоминания разнесены",
+          zip(half, half.dropFirst()).allSatisfy {
+              $1.minutesFromMidnight - $0.minutesFromMidnight >= Int(MoodReminderRules.minimumGap / 60)
+          },
+          "получено \(half.map(Fmt.timeOfDay))")
+
+    // Совсем короткая: три точки слиплись бы в одну — остаётся середина.
+    let short = MoodReminderRules.defaultTimes(start: TimeOfDay(hour: 10, minute: 0),
+                                               end: TimeOfDay(hour: 10, minute: 6))
+    check("на совсем короткой смене остаётся одно напоминание", short.count == 1,
+          "получено \(short.map(Fmt.timeOfDay))")
+    check("без времён по умолчанию не остаёмся никогда", !short.isEmpty)
+
+    // Пустой список — полдень: с него понятнее всего двигать в свою сторону.
+    check("первое напоминание в пустом списке — полдень",
+          MoodReminderRules.timeForNew(after: []) == MoodReminderRules.noon)
+    let one = [MoodReminderTime(hour: 11, minute: 0)]
+    check("следующее встаёт через час после последнего",
+          MoodReminderRules.timeForNew(after: one) == TimeOfDay(hour: 12, minute: 0))
+    let late = [MoodReminderTime(hour: 23, minute: 30)]
+    check("после позднего напоминания время ищется дальше по кругу",
+          MoodReminderRules.timeForNew(after: late).hour < 23,
+          "получено \(Fmt.timeOfDay(MoodReminderRules.timeForNew(after: late)))")
+    check("новое время не совпадает с занятым",
+          MoodReminderRules.timeForNew(after: late) != late[0].time)
+
+    // Часы берутся с машины, а подписи остаются нашими: системный «короткий
+    // стиль» в русском на двенадцатичасовых часах выдаёт «12:00 полд.» —
+    // рядом с полем выбора времени это выглядит как чужая настройка.
+    let noonText = Fmt.clock(moment(2026, 8, 12, 12, 0), timeZone: moscow)
+    check("полдень пишется часами, а не словом", !noonText.contains("полд"), noonText)
+    check("полдень — «12:00» или «12:00 PM», смотря какие часы на машине",
+          noonText == "12:00" || noonText == "12:00 PM", noonText)
+    let earlyText = Fmt.clock(moment(2026, 8, 12, 9, 5), timeZone: moscow)
+    check("минуты всегда двумя цифрами", earlyText.hasSuffix("9:05") || earlyText.hasPrefix("9:05"),
+          earlyText)
+
+    let five = (0..<5).map { MoodReminderTime(hour: 9 + $0, minute: 0) }
+    check("пять напоминаний — предел", !MoodReminderRules.canAdd(five))
+    check("четыре ещё можно дополнить", MoodReminderRules.canAdd(Array(five.dropLast())))
+}
+
+// MARK: - Напоминания: тумблер и список — одна настройка
+
+do {
+    let defaults = MoodReminderRules.defaultTimes(start: TimeOfDay(hour: 10, minute: 0),
+                                                  end: TimeOfDay(hour: 19, minute: 0))
+
+    let off = MoodReminderRules.settled(enabled: false,
+                                        times: [MoodReminderTime(hour: 11, minute: 0)],
+                                        fillEmpty: true, defaults: defaults)
+    check("выключенный тумблер не хранит времён", off.times.isEmpty && !off.enabled)
+
+    let on = MoodReminderRules.settled(enabled: true, times: [], fillEmpty: true, defaults: defaults)
+    check("включённый тумблер ставит времена по умолчанию",
+          on.enabled && on.times.map(\.time) == defaults)
+
+    let emptied = MoodReminderRules.settled(enabled: true, times: [], fillEmpty: false, defaults: defaults)
+    check("удалили последнее напоминание — тумблер гаснет сам",
+          !emptied.enabled && emptied.times.isEmpty)
+
+    let many = (0..<8).map { MoodReminderTime(hour: 20 - $0, minute: 0) }
+    let capped = MoodReminderRules.settled(enabled: true, times: many,
+                                           fillEmpty: false, defaults: defaults)
+    check("больше пяти напоминаний не остаётся",
+          capped.times.count == MoodReminderRules.maxPerDay)
+    check("список выстраивается по времени",
+          capped.times.map(\.time.minutesFromMidnight)
+          == capped.times.map(\.time.minutesFromMidnight).sorted())
+
+    // Опознаватель строки в сравнении настроек не участвует: иначе заново
+    // собранный список тех же времён считался бы правкой.
+    check("строки сравниваются по времени, а не по опознавателю",
+          MoodReminderTime(hour: 11, minute: 0) == MoodReminderTime(hour: 11, minute: 0))
+}
+
+// MARK: - Напоминания: время в настройках и в файле
+
+do {
+    let fresh = AppSettings()
+    check("свежие настройки уже со временами",
+          fresh.moodReminderTimes.map(\.time)
+          == MoodReminderRules.defaultTimes(start: fresh.dayStart, end: fresh.dayEnd))
+    check("времён ровно три", fresh.moodReminderTimes.count == MoodReminderRules.perDay)
+
+    // Файл прежней версии: напоминания включены, а времени в нём нет.
+    // Молча выключить их — отнять напоминания за обновление.
+    let old = decodeSettings("{\"schemaVersion\":3,\"moodRemindersEnabled\":true}")
+    check("старый файл получает времена по умолчанию",
+          old?.moodReminderTimes.count == MoodReminderRules.perDay,
+          "получено \(old?.moodReminderTimes.count ?? -1)")
+    check("старый файл оставляет напоминания включёнными",
+          old?.moodRemindersEnabled == true)
+
+    // Свой график в том же файле — времена считаются по нему, а не по чужому.
+    let nightFile = decodeSettings("""
+    {"schemaVersion":3,"moodRemindersEnabled":true,
+     "dayStart":{"hour":22,"minute":0},"dayEnd":{"hour":6,"minute":0}}
+    """)
+    check("времена по умолчанию считаются по смене из того же файла",
+          nightFile?.moodReminderTimes.contains { $0.time.hour < 12 } == true,
+          "получено \(nightFile?.moodReminderTimes.map { Fmt.timeOfDay($0.time) } ?? [])")
+
+    let chosen = decodeSettings("""
+    {"schemaVersion":3,"moodRemindersEnabled":true,
+     "moodReminderTimes":[{"id":"11111111-1111-1111-1111-111111111111",
+                           "time":{"hour":9,"minute":45}}]}
+    """)
+    check("выбранное человеком время читается как есть",
+          chosen?.moodReminderTimes.map(\.time) == [TimeOfDay(hour: 9, minute: 45)])
+
+    let disabled = decodeSettings("""
+    {"schemaVersion":3,"moodRemindersEnabled":false,
+     "moodReminderTimes":[{"id":"11111111-1111-1111-1111-111111111111",
+                           "time":{"hour":9,"minute":45}}]}
+    """)
+    check("при выключенном тумблере времён в файле не остаётся",
+          disabled?.moodReminderTimes.isEmpty == true)
+
+    // Времена переживают запись и чтение — они едут в копии для переезда.
+    var edited = AppSettings()
+    edited.moodReminderTimes = [MoodReminderTime(hour: 8, minute: 5),
+                                MoodReminderTime(hour: 20, minute: 40)]
+    let roundtrip = try? JSONDecoder().decode(
+        AppSettings.self, from: JSONEncoder().encode(edited))
+    check("времена переживают запись и чтение",
+          roundtrip?.moodReminderTimes.map(\.time) == edited.moodReminderTimes.map(\.time))
+}
+
+// MARK: - Напоминания: план по выбранным временам
+
+do {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = moscow
+    let e = Engine(settings: baseSettings())
+
+    func shift(_ day: DayStamp) -> (start: Date, end: Date)? {
+        guard e.state(of: day, now: day.startOfDay(in: calendar)).isWorkday else { return nil }
+        return e.shift(for: day)
+    }
+
+    let now = moment(2026, 8, 12, 9, 0)          // среда, смена ещё не началась
+    let chosen = [TimeOfDay(hour: 9, minute: 30), TimeOfDay(hour: 21, minute: 0)]
+    let plan = MoodReminderRules.plan(now: now, calendar: calendar, times: chosen,
+                                      shift: shift, marks: [])
+    check("напоминания встают ровно в выбранное время",
+          plan.prefix(2) == [moment(2026, 8, 12, 9, 30), moment(2026, 8, 12, 21, 0)],
+          "получено \(plan.prefix(2).map { Fmt.clock($0, timeZone: moscow) })")
+    check("время вне смены человек выбирает сам, и оно остаётся",
+          plan.contains(moment(2026, 8, 12, 21, 0)))
+    check("выходные пропускаются и с выбранным временем",
+          !plan.contains { DayStamp($0, in: calendar) == DayStamp(year: 2026, month: 8, day: 15) })
+
+    check("без единого времени план пуст",
+          MoodReminderRules.plan(now: now, calendar: calendar, times: [],
+                                 shift: shift, marks: []).isEmpty)
+
+    // Одно и то же время, выставленное дважды, звучать дважды не должно.
+    let twice = MoodReminderRules.plan(now: now, calendar: calendar,
+                                       times: [TimeOfDay(hour: 12, minute: 0),
+                                               TimeOfDay(hour: 12, minute: 0)],
+                                       shift: shift, marks: [])
+    check("одинаковые времена дают один момент",
+          twice.filter { $0 == moment(2026, 8, 12, 12, 0) }.count == 1)
+
+    // Свежая отметка по-прежнему снимает ближайшее напоминание.
+    let marked = MoodReminderRules.plan(now: now, calendar: calendar, times: chosen,
+                                        shift: shift, marks: [moment(2026, 8, 12, 9, 20)])
+    check("свежая отметка снимает ближайшее и с выбранным временем",
+          !marked.contains(moment(2026, 8, 12, 9, 30)))
+
+    // Ночная смена: 22:00–06:00. Время после полуночи принадлежит смене,
+    // которая началась накануне, а не суткам, в которые оно стоит.
+    var nightSettings = baseSettings()
+    nightSettings.dayStart = TimeOfDay(hour: 22, minute: 0)
+    nightSettings.dayEnd = TimeOfDay(hour: 6, minute: 0)
+    let nightEngine = Engine(settings: nightSettings)
+    func nightShift(_ day: DayStamp) -> (start: Date, end: Date)? {
+        guard nightEngine.state(of: day, now: day.startOfDay(in: calendar)).isWorkday else { return nil }
+        return nightEngine.shift(for: day)
+    }
+    let nightPlan = MoodReminderRules.plan(
+        now: moment(2026, 8, 12, 9, 0), calendar: calendar,
+        times: [TimeOfDay(hour: 2, minute: 0), TimeOfDay(hour: 21, minute: 0)],
+        shift: nightShift, marks: [])
+    check("время внутри ночной смены уезжает на следующие сутки",
+          nightPlan.contains(moment(2026, 8, 13, 2, 0)),
+          "получено \(nightPlan.prefix(3).map { Fmt.clock($0, timeZone: moscow) })")
+    check("время до ночной смены остаётся на своих сутках",
+          nightPlan.contains(moment(2026, 8, 12, 21, 0)))
 }
 
 // MARK: - Напоминания: вердикт о разрешении
@@ -1782,16 +2004,19 @@ do {
         return e.shift(for: day)
     }
 
+    let byShift = MoodReminderRules.defaultTimes(start: baseSettings().dayStart,
+                                                 end: baseSettings().dayEnd)
     let now = moment(2026, 8, 12, 10, 55)        // среда, до первого напоминания
-    let plain = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift, marks: [])
+    let plain = MoodReminderRules.plan(now: now, calendar: calendar, times: byShift,
+                                       shift: shift, marks: [])
     check("без таймера первое напоминание в 11:00",
           plain.first == moment(2026, 8, 12, 11, 0),
           plain.first.map { Fmt.clock($0, timeZone: moscow) } ?? "нет")
 
     // Фокус-сессия до 11:19, тишина до 11:20 — напоминание уезжает на её конец.
     let focusEnd = moment(2026, 8, 12, 11, 20)
-    let shifted = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
-                                         marks: [], focusEnd: focusEnd)
+    let shifted = MoodReminderRules.plan(now: now, calendar: calendar, times: byShift,
+                                         shift: shift, marks: [], focusEnd: focusEnd)
     check("напоминание внутри сессии сдвигается на её конец",
           shifted.first == focusEnd,
           shifted.first.map { Fmt.clock($0, timeZone: moscow) } ?? "нет")
@@ -1801,17 +2026,459 @@ do {
 
     // Два напоминания, попавшие в одну сессию, складываются в одно:
     // звучать подряд им незачем.
-    let long = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
-                                      marks: [], focusEnd: moment(2026, 8, 12, 14, 40))
+    let long = MoodReminderRules.plan(now: now, calendar: calendar, times: byShift,
+                                      shift: shift, marks: [],
+                                      focusEnd: moment(2026, 8, 12, 14, 40))
     check("два напоминания в одной сессии складываются в одно",
           long.count == plain.count - 1, "получено \(long.count) против \(plain.count)")
     check("сложенное напоминание встаёт на конец сессии",
           long.first == moment(2026, 8, 12, 14, 40))
 
     // Сессия кончилась раньше первого напоминания — план не трогается.
-    let early = MoodReminderRules.plan(now: now, calendar: calendar, shift: shift,
-                                       marks: [], focusEnd: moment(2026, 8, 12, 10, 58))
+    let early = MoodReminderRules.plan(now: now, calendar: calendar, times: byShift,
+                                       shift: shift, marks: [],
+                                       focusEnd: moment(2026, 8, 12, 10, 58))
     check("сессия до напоминания план не двигает", early == plain)
+}
+
+// MARK: - Заготовки под рукой
+
+do {
+    let list = [
+        Snippet(name: "Zoom", text: "  https://zoom.us/j/1234567890  \n"),
+        Snippet(name: "   ", text: "почта@работа.рф"),
+        Snippet(name: "Пустая", text: "   \n  "),
+    ]
+    let fixed = SnippetRules.normalized(list)
+
+    check("заготовки не теряются при нормализации", fixed.count == 3)
+    check("пустое имя заменяется", fixed[1].name == SnippetRules.defaultName)
+    check("имя обрезается по краям", SnippetRules.normalized([Snippet(name: " Почта ", text: "x")])[0].name == "Почта")
+
+    check("в буфер идёт текст без пробелов по краям",
+          fixed[0].payload == "https://zoom.us/j/1234567890",
+          "получено «\(fixed[0].payload)»")
+    check("заготовка с текстом готова к копированию", fixed[0].isReady)
+    check("заготовка из одних пробелов не готова", !fixed[2].isReady)
+
+    // Файл настроек правят руками и везут с другой машины — оттуда может
+    // приехать и седьмая заготовка, и роман вместо ссылки.
+    let many = (1...9).map { Snippet(name: "№\($0)", text: "\($0)") }
+    check("лишние заготовки отбрасываются",
+          SnippetRules.normalized(many).count == SnippetRules.maxSlots,
+          "получено \(SnippetRules.normalized(many).count)")
+    check("остаются первые, а не случайные",
+          SnippetRules.normalized(many).map(\.name) == ["№1", "№2", "№3", "№4", "№5", "№6"])
+
+    let long = String(repeating: "я", count: SnippetRules.maxTextLength + 500)
+    check("слишком длинный текст режется",
+          SnippetRules.normalized([Snippet(name: "Роман", text: long)])[0].text.count
+            == SnippetRules.maxTextLength)
+    check("текст в пределах длины не трогается",
+          SnippetRules.clamped("короткий") == "короткий")
+
+    check("шесть заготовок — предел", !SnippetRules.canAdd(many))
+    check("пятую завести можно",
+          SnippetRules.canAdd(Array(many.prefix(5))))
+}
+
+do {
+    // Имя на плашке. Обрезка нужна панели, а не файлу: в настройках человек
+    // должен видеть своё имя целиком.
+    check("короткое имя не трогается", SnippetRules.chipName("Zoom") == "Zoom")
+
+    let long = "Личная комната для созвонов"
+    let short = SnippetRules.chipName(long)
+    check("длинное имя ужимается до предела",
+          short.count == SnippetRules.chipNameLength, "получено \(short.count)")
+    check("ужатое имя показывает и начало, и конец",
+          short.hasPrefix("Личная") && short.hasSuffix("созвонов") && short.contains("…"),
+          "получено «\(short)»")
+
+    // Подсказка всплывает от наведения мыши, а мышь по панели водят
+    // и на демонстрации экрана: текста заготовки в ней быть не должно.
+    let hint = SnippetRules.chipHint(name: "Zoom", isReady: true, copied: false)
+    check("подсказка зовёт скопировать", hint.contains("Скопировать") && hint.contains("Zoom"))
+    check("подсказка пустой заготовки отправляет в настройки",
+          SnippetRules.chipHint(name: "Zoom", isReady: false, copied: false).contains("настройк"))
+    check("подсказка после копирования говорит про буфер",
+          SnippetRules.chipHint(name: "Zoom", isReady: true, copied: true).contains("буфер"))
+}
+
+do {
+    check("по умолчанию блока заготовок нет", AppSettings().snippetsEnabled == false)
+    check("по умолчанию заготовок не заведено", AppSettings().snippets.isEmpty)
+
+    // Файл, записанный до появления заготовок, читается как раньше.
+    let old = decodeSettings("""
+    { "monthlyAmount": 210000, "timerEnabled": true }
+    """)
+    check("старый файл настроек не знает про заготовки",
+          old?.snippets.isEmpty == true && old?.snippetsEnabled == false)
+
+    var settings = baseSettings()
+    settings.snippetsEnabled = true
+    settings.snippets = [Snippet(name: "Zoom", text: "https://zoom.us/j/1234567890"),
+                         Snippet(name: "Адрес", text: "Москва, ул. Правды, 24\n3 этаж")]
+    guard let data = try? JSONEncoder().encode(settings),
+          let restored = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+        check("заготовки переживают запись и чтение", false, "не удалось закодировать")
+        exit(1)
+    }
+    check("заготовки переживают запись и чтение", restored.snippets == settings.snippets)
+    check("перевод строки внутри заготовки не теряется",
+          restored.snippets.last?.text.contains("\n") == true)
+
+    // Копия для переезда везёт настройки целиком — заготовки едут вместе с ними.
+    let file = Backup.make(settings: settings, entries: [], appVersion: "1.16",
+                           machine: "MacBook", at: moment(2026, 8, 17, 14, 32))
+    let copied = try! Backup.decode(try! Backup.encode(file))
+    check("заготовки переезжают в копии", copied.settings?.snippets == settings.snippets)
+}
+
+// MARK: - Заготовки: форматирование из буфера обмена
+
+/// Кусок размеченного текста — «Zoom» со ссылкой внутри слова, ровно то,
+/// что копируют из Slack.
+func linkedRTF(_ word: String = "Zoom",
+               url: String = "https://example.test/room") -> Data {
+    let text = NSMutableAttributedString(string: word)
+    text.addAttribute(.link, value: URL(string: url)!,
+                      range: NSRange(location: 0, length: text.length))
+    return SnippetRules.rtfData(text)!
+}
+
+do {
+    let rtf = linkedRTF()
+    let capture = SnippetRules.capture(rtf: rtf, html: nil, plain: "Zoom")
+
+    check("текст со ссылкой берётся с форматированием",
+          { if case .rich = capture { return true }; return false }(),
+          "получено \(capture)")
+    check("видимый текст остаётся видимым текстом", capture.text == "Zoom")
+    check("размеченный кусок сохранён",
+          { if case .rich(_, let rtf, _) = capture { return rtf != nil }; return false }())
+
+    // Главное: ссылка должна пережить хранение. Если RTF её теряет, вся затея
+    // бессмысленна — вставится голое слово.
+    if case .rich(_, let stored?, _) = capture {
+        let restored = NSAttributedString(rtf: stored, documentAttributes: nil)
+        var link: URL?
+        restored?.enumerateAttribute(.link, in: NSRange(location: 0, length: restored?.length ?? 0)) { value, _, _ in
+            if let url = value as? URL { link = url }
+            if let string = value as? String { link = URL(string: string) }
+        }
+        check("ссылка переживает хранение в заготовке",
+              link?.absoluteString == "https://example.test/room",
+              "получено \(link?.absoluteString ?? "ничего")")
+        check("видимый текст из хранимого куска читается",
+              SnippetRules.plainText(fromRTF: stored) == "Zoom")
+        check("для программ на Electron находится HTML",
+              (SnippetRules.htmlData(fromRTF: stored)?.count ?? 0) > 0)
+    }
+}
+
+do {
+    // Slack и прочие на Electron кладут в буфер HTML, а не RTF. Его надо
+    // сохранить дословно: именно его они и читают при вставке, а пересобранный
+    // из RTF — это уже не то, что они положили.
+    let html = Data("""
+    <meta charset='utf-8'><a href="https://example.test/room">Zoom</a>
+    """.utf8)
+    let capture = SnippetRules.capture(rtf: nil, html: html, plain: "Zoom")
+    check("разметка из HTML тоже берётся",
+          { if case .rich = capture { return true }; return false }(),
+          "получено \(capture)")
+    check("текст из HTML не теряется", capture.text == "Zoom")
+
+    if case .rich(_, let rtf, let keptHTML) = capture {
+        check("HTML сохраняется дословно, как его дал источник", keptHTML == html)
+        check("для родных программ RTF достраивается", rtf != nil)
+        check("ссылка видна и в достроенном RTF",
+              rtf.flatMap { SnippetRules.attributed(rtf: $0) }
+                .flatMap(SnippetRules.firstLink) == "https://example.test/room")
+    }
+}
+
+do {
+    // Программа может положить простой RTF и размеченный HTML разом. Решение
+    // по одному только RTF потеряло бы ссылку, лежащую рядом, — а это ровно
+    // тот случай, из-за которого первая попытка брала Slack простым текстом.
+    let plainRTF = SnippetRules.rtfData(NSAttributedString(string: "Zoom"))!
+    let html = Data("<a href=\"https://example.test/room\">Zoom</a>".utf8)
+    let capture = SnippetRules.capture(rtf: plainRTF, html: html, plain: "Zoom")
+    check("размеченный HTML рядом с простым RTF не теряется",
+          { if case .rich = capture { return true }; return false }(),
+          "получено \(capture)")
+
+    // Разбор HTML ходит в WebKit и на чужой вёрстке может вернуть пустоту.
+    // Тогда о форматировании судим по самой разметке.
+    check("ссылка видна и без разбора",
+          SnippetRules.looksFormatted(html: Data("<a href=\"x\">y</a>".utf8)))
+    check("простую строку разметкой не считаем",
+          !SnippetRules.looksFormatted(html: Data("<span style=\"color:red\">просто</span>".utf8)))
+    check("адрес достаётся прямо из разметки",
+          SnippetRules.firstHref(Data("<p><a href='https://example.test/room'>Zoom</a></p>".utf8))
+            == "https://example.test/room")
+}
+
+do {
+    // Разметка ровно того вида, какой её кладут программы на Electron:
+    // Slack заворачивает ссылку в span со стилями и своим классом. Проверка
+    // существует потому, что первая попытка на этом и сломалась — заготовка
+    // брала из Slack простой текст.
+    let slack = Data("""
+    <meta charset='utf-8'><span style="color: rgb(29, 28, 29); font-family: Slack-Lato, sans-serif;     font-size: 15px; white-space: pre-wrap;"><a class="c-link"     href="https://example.test/j/1234567890" rel="noopener noreferrer" target="_blank">    Личная комната</a></span>
+    """.utf8)
+    let capture = SnippetRules.capture(rtf: nil, html: slack, plain: "Личная комната")
+
+    check("разметка из Slack берётся с форматированием",
+          { if case .rich = capture { return true }; return false }(),
+          "получено \(capture)")
+    if case .rich(let text, _, let keptHTML) = capture {
+        check("HTML из Slack сохраняется дословно", keptHTML == slack)
+        check("простой вариант — тот, что дал Slack", text == "Личная комната")
+    }
+    check("ссылка из разметки Slack читается",
+          SnippetRules.firstHref(slack) == "https://example.test/j/1234567890")
+}
+
+/// «Пикл» Chromium — тот самый `org.chromium.web-custom-data`: u32 число пар,
+/// дальше пары строк UTF-16 с длиной в символах и выравниванием до 4 байт.
+/// Собираем его руками, чтобы проверить разбор чужого двоичного формата.
+func chromiumPickle(_ entries: [(String, String)], header: Bool = true) -> Data {
+    var payload = Data()
+
+    func uint32(_ value: Int) {
+        var little = UInt32(value).littleEndian
+        payload.append(Data(bytes: &little, count: 4))
+    }
+
+    func string16(_ text: String) {
+        let units = Array(text.utf16)
+        uint32(units.count)
+        for unit in units {
+            var little = unit.littleEndian
+            payload.append(Data(bytes: &little, count: 2))
+        }
+        while payload.count % 4 != 0 { payload.append(0) }
+    }
+
+    uint32(entries.count)
+    for (key, value) in entries {
+        string16(key)
+        string16(value)
+    }
+
+    guard header else { return payload }
+    var size = UInt32(payload.count).littleEndian
+    var data = Data(bytes: &size, count: 4)
+    data.append(payload)
+    return data
+}
+
+do {
+    // Slack кладёт разметку не под общим типом, а в свой «пикл» — замерено
+    // зондом на живом буфере: `public.html` там нет вовсе, есть
+    // `org.chromium.web-custom-data`. Не разобрав его, ссылку не увидеть,
+    // хотя в буфере она есть.
+    let html = "<a href=\"https://example.test/j/123\">Zoom</a>"
+    let pickle = chromiumPickle([("text/plain", "Zoom"), ("text/html", html)])
+    let entries = SnippetRules.chromiumCustom(pickle)
+
+    check("пикл Chromium разбирается", entries.count == 2, "получено \(entries.count)")
+    check("разметка из пикла достаётся", entries["text/html"] == html)
+    check("простая строка из пикла тоже видна", entries["text/plain"] == "Zoom")
+    check("разметка отдаётся как данные",
+          SnippetRules.htmlFromChromium(pickle) == Data(html.utf8))
+
+    // Заголовок кладут не все — разбор должен справляться и без него.
+    check("пикл без заголовка тоже разбирается",
+          SnippetRules.chromiumCustom(chromiumPickle([("text/html", html)], header: false))["text/html"] == html)
+
+    // Чужой двоичный формат: любая неожиданность кончается пустым ответом,
+    // а не порчей заготовки.
+    check("мусор не разбирается",
+          SnippetRules.chromiumCustom(Data([0xff, 0x00, 0x13, 0x37, 0x42])).isEmpty)
+    check("пустые данные не разбираются", SnippetRules.chromiumCustom(Data()).isEmpty)
+    check("в пикле без разметки её и нет",
+          SnippetRules.htmlFromChromium(chromiumPickle([("text/plain", "Zoom")])) == nil)
+
+    // И наконец то, ради чего всё: из такого буфера заготовка берётся
+    // с форматированием.
+    let capture = SnippetRules.capture(rtf: nil,
+                                       html: SnippetRules.htmlFromChromium(pickle),
+                                       plain: "Zoom")
+    check("из пикла Chromium заготовка берётся с форматированием",
+          { if case .rich = capture { return true }; return false }(),
+          "получено \(capture)")
+}
+
+do {
+    // То, что Slack кладёт на самом деле (снято зондом с живого буфера
+    // 2026-09-04): разметки в пикле нет вовсе, есть «дельта» — список кусков
+    // с атрибутами, и ссылка сидит в атрибуте куска. Адрес здесь выдуманный:
+    // настоящий из чужого буфера в репозитории делать нечего.
+    let delta = """
+    {"ops":[{"insert":{"slackemoji":{"text":":slack_call:"}}},{"insert":" "},\
+    {"attributes":{"link":"https://example.test/my/room?pwd=abc.1"},"insert":"Zoom"},\
+    {"insert":" "}]}
+    """
+    let pickle = chromiumPickle([("public.utf8-plain-text", ":slack_call: Zoom "),
+                                 ("slack/texty", delta)])
+
+    guard let html = SnippetRules.htmlFromChromium(pickle) else {
+        check("из дельты Slack получается разметка", false, "не получилось ничего")
+        exit(1)
+    }
+    let text = String(data: html, encoding: .utf8) ?? ""
+    check("из дельты Slack получается разметка", !text.isEmpty)
+    check("ссылка попадает в разметку",
+          text.contains("href=\"https://example.test/my/room?pwd=abc.1\""), text)
+    check("подпись ссылки остаётся на месте", text.contains(">Zoom</a>"))
+    check("эмодзи не теряется", text.contains(":slack_call:"))
+
+    // И то, ради чего всё: из такого буфера заготовка берётся с форматированием,
+    // а ссылку видно и в ней самой.
+    let capture = SnippetRules.capture(rtf: nil, html: html, plain: ":slack_call: Zoom ")
+    check("заготовка из буфера Slack берётся с форматированием",
+          { if case .rich = capture { return true }; return false }(),
+          "получено \(capture)")
+    check("простой вариант — тот, что дал Slack", capture.text == ":slack_call: Zoom")
+
+    if case .rich(_, let rtf, let keptHTML) = capture {
+        check("разметка сохраняется", keptHTML != nil)
+        check("для родных программ достраивается RTF", rtf != nil)
+        check("ссылка видна в достроенном RTF",
+              rtf.flatMap { SnippetRules.attributed(rtf: $0) }.flatMap(SnippetRules.firstLink)
+                == "https://example.test/my/room?pwd=abc.1")
+    }
+
+    // Дельта без выделений — это просто текст, разметка из неё не нужна.
+    check("дельта без ссылок и выделений разметкой не считается",
+          SnippetRules.htmlFromDelta("""
+          {"ops":[{"insert":"просто строка"}]}
+          """) == nil)
+    check("мусор вместо дельты ничего не ломает",
+          SnippetRules.htmlFromDelta("не json вовсе") == nil)
+
+    // Разметку собираем сами, поэтому опасные знаки в тексте и в адресе
+    // обязаны быть экранированы — иначе чужой текст ломает нашу же разметку.
+    let tricky = SnippetRules.htmlFromDelta("""
+    {"ops":[{"attributes":{"link":"https://example.test/?a=1&b=2"},"insert":"<b>жирно</b>"}]}
+    """)
+    let trickyText = tricky.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    check("знаки разметки в тексте экранируются",
+          trickyText.contains("&lt;b&gt;жирно&lt;/b&gt;"), trickyText)
+    check("амперсанд в адресе экранируется", trickyText.contains("a=1&amp;b=2"))
+
+    check("жирное и наклонное тоже переезжают",
+          (SnippetRules.htmlFromDelta("""
+          {"ops":[{"attributes":{"bold":true},"insert":"важно"}]}
+          """).flatMap { String(data: $0, encoding: .utf8) } ?? "").contains("<b>важно</b>"))
+}
+
+do {
+    // Простой вариант и разметка — разные вещи, и это видно в настройках:
+    // «Zoom» со ссылкой внутри, вставленный в Telegram, станет словом «Zoom».
+    let snippet = Snippet(name: "Zoom", text: "Zoom", rich: linkedRTF())
+    check("ссылку из разметки видно", SnippetRules.firstLink(in: snippet) == "https://example.test/room")
+    check("пропажу ссылки в простом варианте видно",
+          SnippetRules.linkMissingFromText(snippet) == "https://example.test/room")
+
+    var withLink = snippet
+    withLink.text = "https://example.test/room"
+    check("подставленная ссылка снимает предупреждение",
+          SnippetRules.linkMissingFromText(withLink) == nil)
+    check("у простой заготовки предупреждения нет",
+          SnippetRules.linkMissingFromText(Snippet(name: "Почта", text: "ivanov@company.ru")) == nil)
+}
+
+do {
+    // Простой текст из редактора приезжает размеченным в один шрифт. Хранить
+    // ради него блоб и писать «с форматированием» было бы неправдой.
+    let plainRTF = SnippetRules.rtfData(NSAttributedString(string: "просто строка"))!
+    let capture = SnippetRules.capture(rtf: plainRTF, html: nil, plain: "просто строка")
+    check("однородный кусок берётся простым текстом",
+          capture == .plain("просто строка"), "получено \(capture)")
+
+    check("без разметки берётся строка",
+          SnippetRules.capture(rtf: nil, html: nil, plain: "  https://example.test  ")
+            == .plain("https://example.test"))
+    check("из пустого буфера брать нечего",
+          SnippetRules.capture(rtf: nil, html: nil, plain: "   \n ") == .empty)
+    check("буфера может не быть вовсе",
+          SnippetRules.capture(rtf: nil, html: nil, plain: nil) == .empty)
+}
+
+do {
+    // Простой текст берётся тот, что положила сама программа-источник:
+    // это её решение, чем заменить форматированный кусок в голом поле.
+    let capture = SnippetRules.capture(rtf: linkedRTF(), html: nil,
+                                       plain: "https://example.test/room")
+    check("простой вариант берётся у программы-источника",
+          capture.text == "https://example.test/room", "получено \(capture.text ?? "ничего")")
+}
+
+do {
+    // Слишком большой кусок разметки в файл настроек не пускаем.
+    let big = NSMutableAttributedString()
+    let bold = NSFont.boldSystemFont(ofSize: 12)
+    for index in 0..<3000 {
+        big.append(NSAttributedString(string: "слово ",
+                                      attributes: index % 2 == 0 ? [.font: bold] : [:]))
+    }
+    let capture = SnippetRules.capture(rtf: SnippetRules.rtfData(big)!, html: nil, plain: big.string)
+    check("слишком большая разметка не берётся",
+          { if case .tooBig = capture { return true }; return false }(),
+          "получено \(capture)")
+    check("текст при этом всё равно берётся",
+          (capture.text?.count ?? 0) == SnippetRules.maxTextLength)
+}
+
+do {
+    // Приведение к правилам: разметке без текста в файле делать нечего.
+    let orphan = Snippet(name: "Пустая", text: "  ", rich: linkedRTF())
+    check("разметка без текста отбрасывается",
+          SnippetRules.normalized([orphan])[0].rich == nil)
+
+    let oversized = Snippet(name: "Толстая", text: "Zoom",
+                            rich: Data(repeating: 0x20, count: SnippetRules.maxRichBytes + 1))
+    check("слишком большая разметка отбрасывается при чтении файла",
+          SnippetRules.normalized([oversized])[0].rich == nil)
+
+    let orphanHTML = Snippet(name: "Пустая", text: "", rich: nil,
+                             html: Data("<a href=\"x\">y</a>".utf8))
+    check("HTML без текста тоже отбрасывается",
+          SnippetRules.normalized([orphanHTML])[0].html == nil)
+
+    let ok = Snippet(name: "Zoom", text: "Zoom", rich: linkedRTF())
+    check("нормальная разметка остаётся", SnippetRules.normalized([ok])[0].rich != nil)
+    check("заготовка с разметкой знает об этом", ok.isRich)
+
+    // Круг «записали — прочитали»: разметка едет в файле base64.
+    var settings = baseSettings()
+    settings.snippets = [ok]
+    let data = try! JSONEncoder().encode(settings)
+    let restored = try! JSONDecoder().decode(AppSettings.self, from: data)
+    check("разметка переживает запись и чтение", restored.snippets == settings.snippets)
+    check("ссылка в файле не потерялась",
+          restored.snippets.first?.rich.flatMap(SnippetRules.plainText(fromRTF:)) == "Zoom")
+}
+
+do {
+    // Подписи под строкой в настройках — то, чего не хватило владельцу:
+    // он вписал название, не заметил поля текста и получил в панели плашку,
+    // которая не нажимается.
+    check("пустая заготовка говорит, чего ей не хватает",
+          SnippetRules.statusNote(Snippet(name: "Zoom", text: ""))?.contains("Текст не задан") == true)
+    check("заполненная простая заготовка молчит",
+          SnippetRules.statusNote(Snippet(name: "Zoom", text: "ссылка")) == nil)
+    check("заготовка с разметкой говорит про вставку",
+          SnippetRules.statusNote(Snippet(name: "Zoom", text: "Zoom", rich: linkedRTF()))?
+            .contains("вставку") == true)
+    check("пустому буферу отвечают словами",
+          SnippetRules.captureNote(.empty).contains("нечего"))
 }
 
 // MARK: - Итог

@@ -13,7 +13,7 @@ swiftc -O \
   Sources/Model/Formatting.swift Sources/Model/Backup.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
-  Sources/Model/FocusTimer.swift \
+  Sources/Model/FocusTimer.swift Sources/Model/Snippets.swift \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift \
   Sources/Support/PrivacyMonitor.swift \

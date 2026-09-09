@@ -42,12 +42,62 @@ enum Fmt {
         return "\(s) с"
     }
 
+    /// Часы и минуты — по тем часам, что стоят на компьютере.
+    ///
+    /// У системы спрашивается ровно одно: двенадцать часов или двадцать четыре.
+    /// Это отдельная настройка региона, и человеку, у которого весь macOS
+    /// показывает «2:30 PM», приложение не должно отвечать «14:30» —
+    /// тем более что время напоминания он задаёт системным полем, и оно
+    /// подписано по-своему.
+    ///
+    /// Сам формат при этом наш, а не системный: язык у приложения русский
+    /// в любом регионе, а системный «короткий стиль» подставляет ещё
+    /// и названия частей суток — «12:00 полд.» вместо «12:00 PM».
+    /// Пояс остаётся рабочим, из настроек: уехавший в отпуск ноутбук
+    /// не должен переписывать границы смены.
     static func clock(_ date: Date, timeZone: TimeZone) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ru_RU")
         f.timeZone = timeZone
-        f.dateFormat = "HH:mm"
+        f.dateFormat = systemUses12HourClock ? "h:mm a" : "HH:mm"
         return f.string(from: date)
+    }
+
+    /// Стоят ли на машине двенадцатичасовые часы.
+    ///
+    /// Шаблон «j» — это и есть вопрос «какой час у этой локали»: система
+    /// отвечает `h` или `H`, и другого открытого способа узнать положение
+    /// переключателя в настройках региона нет.
+    static var systemUses12HourClock: Bool {
+        let pattern = DateFormatter.dateFormat(fromTemplate: "j", options: 0,
+                                               locale: .autoupdatingCurrent) ?? "H"
+        return pattern.contains("h")
+    }
+
+    /// Локаль интерфейса: русская, но с теми часами, что стоят на машине.
+    ///
+    /// Ставится на всё окно и на панель. Русская она потому, что интерфейс
+    /// русский в любом регионе: даты должны читаться как «24.08.2026»,
+    /// а месяцы называться по-русски, куда бы ни уехал ноутбук. А часы берутся
+    /// системные, потому что их человек задаёт сам и видит в строке меню
+    /// рядом — и поле выбора времени напоминания обязано выглядеть так же,
+    /// как остальные часы на этой машине.
+    static var uiLocale: Locale {
+        var parts = Locale.Components(identifier: "ru_RU")
+        parts.hourCycle = systemUses12HourClock ? .oneToTwelve : .zeroToTwentyThree
+        return Locale(components: parts)
+    }
+
+    /// Время суток без даты — тем же форматом, что и `clock`.
+    ///
+    /// Нужно там, где момента ещё нет: напоминание в настройках задано часами
+    /// и минутами, а не точкой на календаре.
+    static func timeOfDay(_ time: TimeOfDay) -> String {
+        let calendar = Calendar.current
+        let midnight = calendar.startOfDay(for: Date())
+        let date = calendar.date(bySettingHour: time.hour, minute: time.minute,
+                                 second: 0, of: midnight) ?? midnight
+        return clock(date, timeZone: calendar.timeZone)
     }
 
     /// Название месяца в винительном падеже: «за август», «за сентябрь».

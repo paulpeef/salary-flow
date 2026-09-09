@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="SalaryFlow"
 BUNDLE_ID="io.github.paulpeef.salaryflow"
-VERSION="${VERSION:-1.15}"
+VERSION="${VERSION:-1.16}"
 FEED_URL="https://raw.githubusercontent.com/paulpeef/salary-flow/main/appcast.xml"
 # Публичный ключ проверки обновлений. Приватный лежит в связке ключей
 # разработчика и в секретах репозитория — сюда он не попадает никогда.
@@ -47,7 +47,7 @@ swiftc -parse-as-library -O \
   Sources/Model/Formatting.swift Sources/Model/Backup.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
-  Sources/Model/FocusTimer.swift \
+  Sources/Model/FocusTimer.swift Sources/Model/Snippets.swift \
   Sources/Model/AppModel.swift \
   Sources/UI/PanelView.swift \
   Sources/UI/SettingsView.swift \
@@ -55,6 +55,7 @@ swiftc -parse-as-library -O \
   Sources/UI/CalendarGrid.swift \
   Sources/UI/MoodBlock.swift Sources/UI/MoodStatsView.swift \
   Sources/UI/BrowserBlock.swift Sources/UI/TimerBlock.swift \
+  Sources/UI/SnippetBlock.swift \
   Sources/Support/AppDelegate.swift \
   Sources/Support/LaunchAgent.swift Sources/Support/HotKeys.swift \
   Sources/Support/MoodReminder.swift \

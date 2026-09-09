@@ -17,7 +17,7 @@ swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.b
   Sources/Model/Formatting.swift Sources/Model/Backup.swift \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
-  Sources/Model/FocusTimer.swift \
+  Sources/Model/FocusTimer.swift Sources/Model/Snippets.swift \
   Sources/Model/AppModel.swift \
   Sources/UI/PanelView.swift \
   Sources/UI/SettingsView.swift \
@@ -25,6 +25,7 @@ swiftc -O -F .build/sparkle -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/.b
   Sources/UI/CalendarGrid.swift \
   Sources/UI/MoodBlock.swift Sources/UI/MoodStatsView.swift \
   Sources/UI/BrowserBlock.swift Sources/UI/TimerBlock.swift \
+  Sources/UI/SnippetBlock.swift \
   Sources/Support/AppDelegate.swift \
   Sources/Support/LaunchAgent.swift Sources/Support/HotKeys.swift \
   Sources/Support/MoodReminder.swift \

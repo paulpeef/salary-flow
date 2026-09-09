@@ -156,12 +156,14 @@ MainActor.assumeIsolated {
 
     print("\nНапоминание внутри сессии")
 
-    // Смену подгоняем под текущий момент, чтобы ближайшее напоминание пришлось
-    // на ближайшие минуты: расписание считается из границ рабочего дня.
+    // Смену и само напоминание подгоняем под текущий момент, чтобы ближайший
+    // срок пришёлся на ближайшие минуты — внутрь той сессии, которую
+    // мы сейчас запустим.
     let now = Date()
     let calendar = Calendar.current
     let from = calendar.dateComponents([.hour, .minute], from: now.addingTimeInterval(-10 * 60))
     let to = calendar.dateComponents([.hour, .minute], from: now.addingTimeInterval(20 * 60))
+    let due = calendar.dateComponents([.hour, .minute], from: now.addingTimeInterval(3 * 60))
 
     var shifted = model.settings
     shifted.moodEnabled = true
@@ -172,6 +174,9 @@ MainActor.assumeIsolated {
     shifted.workWeekdays = Set(1...7)
     shifted.dayStart = TimeOfDay(hour: from.hour ?? 0, minute: from.minute ?? 0)
     shifted.dayEnd = TimeOfDay(hour: to.hour ?? 0, minute: to.minute ?? 0)
+    // Время напоминания задаёт человек, и зонд здесь за него: три минуты
+    // вперёд — заведомо внутри шестиминутной сессии.
+    shifted.moodReminderTimes = [MoodReminderTime(hour: due.hour ?? 0, minute: due.minute ?? 0)]
     shifted.timeZoneID = TimeZone.current.identifier
     shifted.employmentStart = DayStamp(year: 2020, month: 1, day: 1)
     shifted.timerPresets = [TimerPreset(name: "Долгий", seconds: 6 * 60)]

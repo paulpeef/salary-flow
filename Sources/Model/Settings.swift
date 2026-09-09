@@ -318,10 +318,21 @@ struct AppSettings: Codable, Equatable {
     /// часть счётчика, и панель без него просто короче.
     var moodEnabled: Bool = true
 
-    /// Напоминать отметить настроение три раза за смену.
+    /// Напоминать отметить настроение.
     /// По умолчанию включено: опрос, о котором не вспоминают, не даёт данных,
     /// а выключается он одним тумблером там же, где включается опрос.
     var moodRemindersEnabled: Bool = true
+
+    /// Во сколько напоминать — до пяти раз за день.
+    ///
+    /// Список, а не три точки, посчитанные по смене на лету: время напоминания
+    /// человек чувствует лучше любого правила — у кого-то в час дня обед,
+    /// у кого-то в шесть вечера созвон. Заполняется тот же расчёт по смене,
+    /// что и раньше, но теперь это отправная точка, а не приговор.
+    ///
+    /// Пустым при включённом тумблере не бывает: правило одно и то же
+    /// в `MoodReminderRules.settled` — и для окна настроек, и для файла.
+    var moodReminderTimes: [MoodReminderTime] = []
 
     /// Чем напоминать: уведомлением или раскрытой панелью.
     /// По умолчанию уведомлением — так напоминание догонит и того, кто сидит
@@ -355,6 +366,19 @@ struct AppSettings: Codable, Equatable {
 
     /// Что рисовать в строке меню, пока таймер идёт.
     var timerDial: TimerDial = .ring
+
+    // Заготовки под рукой
+
+    /// Показывать в панели заготовки для копирования.
+    /// По умолчанию выключены, как таймер и выбор браузера: панель нужна
+    /// прежде всего ради денег, и необязательные блоки в ней включает тот,
+    /// кому они нужны.
+    var snippetsEnabled: Bool = false
+
+    /// Что держать под рукой, до шести штук. Пустой список по умолчанию
+    /// намеренно: заготовки со стороны не придумать — чужая ссылка на Zoom
+    /// не нужна никому, а строка-пример в панели выглядела бы как чей-то мусор.
+    var snippets: [Snippet] = []
 
     // Приватность
     var privacyOnCamera: Bool = true
@@ -390,7 +414,14 @@ struct AppSettings: Codable, Equatable {
             .map { CaptureSuspect($0, .presence) }
     }
 
-    init() {}
+    /// Пустой список времён при включённых напоминаниях — состояние, которого
+    /// быть не должно, поэтому свежие настройки сразу получают три точки
+    /// по рабочему дню, а не ждут первого захода в окно настроек.
+    init() {
+        moodReminderTimes = MoodReminderRules
+            .defaultTimes(start: dayStart, end: dayEnd)
+            .map { MoodReminderTime($0) }
+    }
 
     /// Поля, которых в структуре уже нет, но которые могут лежать в файле.
     /// Синтезированные `CodingKeys` про них не знают — читаем отдельным ключом.
@@ -437,11 +468,25 @@ struct AppSettings: Codable, Equatable {
         moodEnabled = c.value(.moodEnabled, or: d.moodEnabled)
         moodRemindersEnabled = c.value(.moodRemindersEnabled, or: d.moodRemindersEnabled)
         moodReminderStyle = c.value(.moodReminderStyle, or: d.moodReminderStyle)
+        moodReminderTimes = c.value(.moodReminderTimes, or: [])
+        // Файл, записанный версией без выбора времени: напоминания в нём
+        // включены, а времени нет — подставляем те же три точки, которые
+        // приложение до сих пор считало по смене само. Молча их выключить
+        // значило бы отнять у человека напоминания за обновление.
+        let reminders = MoodReminderRules.settled(
+            enabled: moodRemindersEnabled,
+            times: moodReminderTimes,
+            fillEmpty: true,
+            defaults: MoodReminderRules.defaultTimes(start: dayStart, end: dayEnd))
+        moodRemindersEnabled = reminders.enabled
+        moodReminderTimes = reminders.times
         browserPickerEnabled = c.value(.browserPickerEnabled, or: d.browserPickerEnabled)
         browserPickerHidden = c.value(.browserPickerHidden, or: d.browserPickerHidden)
         timerEnabled = c.value(.timerEnabled, or: d.timerEnabled)
         timerPresets = c.value(.timerPresets, or: d.timerPresets)
         timerDial = c.value(.timerDial, or: d.timerDial)
+        snippetsEnabled = c.value(.snippetsEnabled, or: d.snippetsEnabled)
+        snippets = c.value(.snippets, or: d.snippets)
 
         // Файл до третьей версии формата: поле «вне рабочего дня показывать»
         // разошлось на два — что показывать вообще и показывать ли вечером.

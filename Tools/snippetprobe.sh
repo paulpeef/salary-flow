@@ -1,7 +1,7 @@
 #!/bin/bash
-# Зонд таймера: гоняет настоящую модель по настоящим часам — фазы, пауза,
-# итог дня и сдвиг напоминания о настроении на конец сессии.
-# Боевые настройки, журнал и отметки не трогает.
+# Зонд заготовок: гоняет настоящую модель по настоящему буферу обмена —
+# что в него ложится и как живёт отметка «скопировано».
+# Боевые настройки, журнал и отметки не трогает, чужой буфер обмена возвращает.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,11 +28,11 @@ swiftc -O -F .build/sparkle -framework Sparkle \
   Sources/Support/MoodReminder.swift Sources/Support/Migration.swift \
   Sources/Support/Log.swift Sources/Support/PrivacyMonitor.swift \
   Sources/Support/BrowserSwitcher.swift Sources/Support/Updater.swift \
-  Tools/TimerProbe/main.swift \
-  -o .build/TimerProbe
+  Tools/SnippetProbe/main.swift \
+  -o .build/SnippetProbe
 
 SALARYFLOW_LOG_DIR="$(mktemp -d)/logs" \
 SALARYFLOW_SETTINGS="$(mktemp -d)/probe-settings.json" \
 SALARYFLOW_MOOD="$(mktemp -d)/probe-mood.json" \
 SALARYFLOW_TIMERS="$(mktemp -d)/probe-timers.json" \
-.build/TimerProbe
+.build/SnippetProbe

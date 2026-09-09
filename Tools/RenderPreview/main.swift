@@ -134,6 +134,28 @@ func demoMoodEntries(reference: Date) -> [MoodEntry] {
 /// Браузеры для превью. Настоящий список зависит от того, что стоит на машине,
 /// где снимают снимок, — а снимки должны быть одинаковыми везде. Пути ведут
 /// в «Программы»: где программа есть, в плашку попадёт её настоящая иконка.
+/// Заготовки для превью. Шесть штук — предел, и смотреть надо именно на предел:
+/// по нему видно, укладываются ли плашки в два ряда и не разъезжается ли облако.
+/// Последняя намеренно пустая: так на снимке видно приглушённую плашку.
+/// Размеченный кусок для превью — «Zoom» со ссылкой внутри слова, ровно то,
+/// что копируют из Slack. Нужен, чтобы на снимке настроек была видна строка
+/// заготовки с форматированием: заблокированное поле и подпись под ним.
+func demoLinkedRTF() -> Data? {
+    let text = NSMutableAttributedString(string: "Личная комната Zoom")
+    text.addAttribute(.link, value: URL(string: "https://zoom.us/j/1234567890")!,
+                      range: NSRange(location: 0, length: text.length))
+    return SnippetRules.rtfData(text)
+}
+
+let demoSnippets = [
+    Snippet(name: "Zoom", text: "Личная комната Zoom", rich: demoLinkedRTF()),
+    Snippet(name: "Почта", text: "ivanov@company.ru"),
+    Snippet(name: "Телефон", text: "+7 900 000-00-00"),
+    Snippet(name: "Адрес офиса", text: "Москва, ул. Правды, 24, 3 этаж"),
+    Snippet(name: "Реквизиты", text: "ООО «Компания», ИНН 7700000000"),
+    Snippet(name: "Ещё не заполнил", text: ""),
+]
+
 let demoBrowsers = [
     BrowserApp(bundleID: "com.apple.Safari", name: "Safari",
                url: URL(fileURLWithPath: "/Applications/Safari.app")),
@@ -222,6 +244,37 @@ MainActor.assumeIsolated {
         render(PanelView(model: model).frame(width: 340), to: "\(outDir)/panel-timer-\(name).png")
     }
 
+    // Панель с заготовками. Два снимка: обычный вид и вид сразу после нажатия.
+    // Высота у них обязана совпасть до пикселя — отметка «скопировано» меняет
+    // заливку и значок, но не ширину плашки, иначе облако переносило бы её
+    // на другой ряд и панель дёргалась бы на каждое копирование.
+    let snippets = makeModel {
+        $0.snippetsEnabled = true
+        $0.snippets = demoSnippets
+    }
+    snippets.overrideNow(moment(2026, 8, 12, 14, 37))
+    render(PanelView(model: snippets).frame(width: 340), to: "\(outDir)/panel-snippets.png")
+
+    let snippetCopied = makeModel {
+        $0.snippetsEnabled = true
+        $0.snippets = demoSnippets
+    }
+    snippetCopied.overrideNow(moment(2026, 8, 12, 14, 37))
+    snippetCopied.markSnippetCopiedForPreview(demoSnippets[0].id)
+    render(PanelView(model: snippetCopied).frame(width: 340), to: "\(outDir)/panel-snippets-copied.png")
+
+    // Самая длинная панель, какая вообще бывает: включено всё сразу. По ней
+    // видно, во что превращается счётчик у того, кто включил каждый блок.
+    let everything = makeModel {
+        $0.timerEnabled = true
+        $0.snippetsEnabled = true
+        $0.snippets = demoSnippets
+        $0.browserPickerEnabled = true
+    }
+    everything.browsers.overrideForPreview(installed: demoBrowsers, current: "com.google.Chrome")
+    everything.overrideNow(moment(2026, 8, 12, 14, 37))
+    render(PanelView(model: everything).frame(width: 340), to: "\(outDir)/panel-everything.png")
+
     // Значок строки меню. Саму строку оффскрин не воспроизвести, а вот метку
     // с каплей и цифрами — можно, и это единственный способ увидеть свою
     // картинку рядом с текстом до установки: подогнана ли высота, не вылезает
@@ -284,13 +337,15 @@ MainActor.assumeIsolated {
     let sections: [(SettingsSection, String)] = [
         (.money, "money"), (.schedule, "schedule"), (.specialDays, "days"),
         (.counter, "counter"), (.privacy, "privacy"), (.mood, "mood"),
-        (.timer, "timer"), (.browser, "browser"), (.app, "app")
+        (.timer, "timer"), (.snippets, "snippets"), (.browser, "browser"), (.app, "app")
     ]
     for (section, name) in sections {
         let sectionModel = makeModel {
             $0.ranges = settingsModel.settings.ranges
             $0.browserPickerEnabled = true
             $0.timerEnabled = true
+            $0.snippetsEnabled = true
+            $0.snippets = demoSnippets
             // Одному таймеру назначено сочетание, остальным нет: на снимке
             // должны быть видны оба состояния кнопки.
             $0.timerPresets = TimerRules.assigning(
@@ -304,6 +359,21 @@ MainActor.assumeIsolated {
                      size: settingsSize,
                      to: "\(outDir)/settings-\(name).png")
     }
+
+    // Отдельно — незаполненная заготовка: ровно то состояние, на котором
+    // владелец споткнулся (вписал название, не заметил поля текста и получил
+    // в панели плашку, которая не нажимается). Строка обязана говорить об этом
+    // сама, поэтому её видно на снимке.
+    let halfFilled = makeModel {
+        $0.snippetsEnabled = true
+        $0.snippets = [Snippet(name: "Почта", text: "ivanov@company.ru"),
+                       Snippet(name: "Zoom", text: "")]
+    }
+    halfFilled.settingsSection = .snippets
+    halfFilled.overrideNow(moment(2026, 8, 12, 14, 37))
+    renderWindow(SettingsView(model: halfFilled),
+                 size: settingsSize,
+                 to: "\(outDir)/settings-snippets-empty.png")
 
     // Отдельно — приватность в момент звонка Zoom без демонстрации экрана.
     // Ровно на этом состоянии приложение полгода прятало суммы зря: процесс
@@ -342,9 +412,39 @@ MainActor.assumeIsolated {
         model.reminders.overrideForPreview(access: access, refusal: refusal, test: test)
         renderWindow(MoodStatsView(model: model, log: model.mood, reminders: model.reminders)
                         .environment(\.locale, Locale(identifier: "ru_RU")),
-                     size: CGSize(width: 510, height: 320),
+                     size: CGSize(width: 510, height: 620),
                      to: "\(outDir)/reminders-\(name).png")
     }
+
+    // Времена напоминаний: три по умолчанию, пять (добавлять больше некуда),
+    // одно (убрать его — и тумблер погаснет) и сдвинутые руками, при которых
+    // просыпается кнопка «Расставить по графику».
+    let timeStates: [(String, [MoodReminderTime])] = [
+        ("five", (0..<5).map { MoodReminderTime(hour: 10 + $0 * 2, minute: 0) }),
+        ("one", [MoodReminderTime(hour: 16, minute: 45)]),
+        ("moved", [MoodReminderTime(hour: 11, minute: 0),
+                   MoodReminderTime(hour: 13, minute: 20),
+                   MoodReminderTime(hour: 18, minute: 15)])
+    ]
+    for (name, times) in timeStates {
+        let model = makeModel { $0.moodReminderTimes = times }
+        model.overrideNow(moment(2026, 8, 12, 14, 37))
+        model.reminders.overrideForPreview(access: .granted, test: .delivered)
+        renderWindow(MoodStatsView(model: model, log: model.mood, reminders: model.reminders)
+                        .environment(\.locale, Locale(identifier: "ru_RU")),
+                     size: CGSize(width: 510, height: 700),
+                     to: "\(outDir)/reminders-times-\(name).png")
+    }
+
+    // То же самое без подмены языка: время в приложении показывается так, как
+    // настроено на этой машине, и увидеть надо именно машинный формат —
+    // на ru_MY, например, часы двенадцатичасовые.
+    let asSystem = makeModel { _ in }
+    asSystem.overrideNow(moment(2026, 8, 12, 14, 37))
+    asSystem.reminders.overrideForPreview(access: .granted, test: .delivered)
+    renderWindow(MoodStatsView(model: asSystem, log: asSystem.mood, reminders: asSystem.reminders),
+                 size: CGSize(width: 510, height: 620),
+                 to: "\(outDir)/reminders-system-clock.png")
 }
 
 func moment(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date {
