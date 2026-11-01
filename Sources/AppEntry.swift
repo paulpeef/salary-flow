@@ -15,7 +15,7 @@ struct SalaryFlowApp: App {
         )) {
             PanelView(model: model)
         } label: {
-            MenuBarLabel(model: model)
+            AccessibleMenuBarLabel(model: model, delegate: delegate)
         }
         .menuBarExtraStyle(.window)
 
@@ -28,5 +28,24 @@ struct SalaryFlowApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.center)
+    }
+}
+
+/// Открытие из Finder должно давать видимое окно даже при скрытом пункте
+/// меню-бара. OpenWindowAction берём из окружения сцены, а ранний запрос
+/// делегат сохраняет до её появления.
+private struct AccessibleMenuBarLabel: View {
+    @ObservedObject var model: AppModel
+    let delegate: AppDelegate
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        MenuBarLabel(model: model)
+            .onAppear {
+                delegate.showSettings = {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: WindowID.settings)
+                }
+            }
     }
 }

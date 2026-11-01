@@ -4,6 +4,37 @@ import SwiftUI
 /// Нужен ради двух вещей, которых у SwiftUI-приложения иначе нет:
 /// поднять журнал раньше всего остального и поймать штатное завершение.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var pendingOpen = false
+    var showSettings: (() -> Void)? {
+        didSet {
+            if pendingOpen, showSettings != nil {
+                pendingOpen = false
+                showSettings?()
+            }
+        }
+    }
+
+    private func openFromApplications() {
+        Log.info("открытие из Программ: показываю настройки")
+        if let showSettings {
+            showSettings()
+        } else {
+            // Событие открытия может прийти раньше первого появления SwiftUI.
+            pendingOpen = true
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                      hasVisibleWindows flag: Bool) -> Bool {
+        openFromApplications()
+        return false
+    }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        openFromApplications()
+        return true
+    }
+
     override init() {
         super.init()
         AppDelegate.exitIfAlreadyRunning()
