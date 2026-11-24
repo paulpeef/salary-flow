@@ -17,6 +17,8 @@ swiftc -O \
   Sources/Support/Migration.swift \
   Sources/Support/Log.swift \
   Sources/Support/PrivacyMonitor.swift \
+  Sources/Support/MeetingDelivery.swift Sources/Support/MeetingAccessibility.swift Sources/Support/MeetingChat.swift Sources/Support/MeetingZoomBanner.swift Tests/ZoomTileChecks.swift \
+  Sources/Model/MeetingTranscript.swift Tests/MeetingChecks.swift \
   Tests/main.swift \
   -o "$BUILD/EngineTests"
 

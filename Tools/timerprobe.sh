@@ -18,6 +18,9 @@ swiftc -O -F .build/sparkle -framework Sparkle \
   Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
   Sources/Model/FocusTimer.swift Sources/Model/Snippets.swift \
   Sources/Model/AppModel.swift \
+  Sources/Model/MeetingTranscript.swift Sources/UI/MeetingBlock.swift \
+  Sources/Support/MeetingAccessibility.swift Sources/Support/MeetingChat.swift Sources/Support/MeetingProcessing.swift \
+  Sources/Support/MeetingZoomBanner.swift Sources/Support/MeetingRecorder.swift Sources/Support/MeetingDelivery.swift \
   Sources/UI/PanelView.swift Sources/UI/SettingsView.swift \
   Sources/UI/MenuBarLabel.swift Sources/UI/CalendarGrid.swift \
   Sources/UI/MoodBlock.swift Sources/UI/MoodStatsView.swift \

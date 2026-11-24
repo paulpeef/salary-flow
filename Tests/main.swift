@@ -2483,6 +2483,16 @@ do {
 
 // MARK: - Итог
 
+let meetingBoard = NSPasteboard.withUniqueName()
+let meetingSample = "[00:00:02] Участник — проверю завтра.\n\nНаблюдения Salary Flow в Zoom"
+MainActor.assumeIsolated {
+    check("доставка встречи подтверждает полный текст в буфере",
+          MeetingClipboard.write(meetingSample, to: meetingBoard) && meetingBoard.string(forType: .string) == meetingSample)
+}
+meetingBoard.releaseGlobally()
+checkZoomTiles { name, success in check(name, success) }
+checkMeetingTranscripts { name, success in check(name, success) }
+
 if failures.isEmpty {
     print("✅ Все проверки пройдены (\(checks))")
     exit(0)

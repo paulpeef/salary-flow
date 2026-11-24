@@ -51,6 +51,7 @@ struct PanelView: View {
             if model.settings.browserPickerEnabled {
                 BrowserBlock(model: model, browsers: model.browsers)
             }
+            MeetingBlock()
             Divider()
             buttons
         }

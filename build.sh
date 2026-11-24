@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="SalaryFlow"
 BUNDLE_ID="io.github.paulpeef.salaryflow"
-VERSION="${VERSION:-1.17}"
+VERSION="${VERSION:-1.18.6}"
 FEED_URL="https://raw.githubusercontent.com/paulpeef/salary-flow/main/appcast.xml"
 # Публичный ключ проверки обновлений. Приватный лежит в связке ключей
 # разработчика и в секретах репозитория — сюда он не попадает никогда.
@@ -32,6 +32,9 @@ SPARKLE=".build/sparkle"
 echo "→ Тесты расчётного ядра"
 ./Tests/run.sh
 
+echo "→ Локальное разделение голосов"
+./Tools/build-meeting-voices.sh
+
 echo "→ Компиляция"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -49,6 +52,9 @@ swiftc -parse-as-library -O \
   Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
   Sources/Model/FocusTimer.swift Sources/Model/Snippets.swift \
   Sources/Model/AppModel.swift \
+  Sources/Model/MeetingTranscript.swift Sources/UI/MeetingBlock.swift \
+  Sources/Support/MeetingAccessibility.swift Sources/Support/MeetingChat.swift Sources/Support/MeetingProcessing.swift \
+  Sources/Support/MeetingZoomBanner.swift Sources/Support/MeetingRecorder.swift Sources/Support/MeetingDelivery.swift \
   Sources/UI/PanelView.swift \
   Sources/UI/SettingsView.swift \
   Sources/UI/MenuBarLabel.swift \
@@ -89,6 +95,8 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
 mkdir -p "$APP/Contents/Frameworks"
 cp -R "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/"
+cp .build/meeting-helper/release/MeetingVoices "$APP/Contents/MacOS/"
+cp .build/meeting-fluid/LICENSE "$APP/Contents/Resources/FluidAudio-LICENSE.txt"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -113,7 +121,19 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - --timestamp=none "$APP" >/dev/null 2>&1 || true
+# A consistent signing identity lets macOS recognize successive local builds.
+# Ad-hoc signing remains available on machines without a signing certificate.
+signer="${SALARYFLOW_SIGN_IDENTITY:-}"
+signer_file="$HOME/Library/Application Support/SalaryFlow/signing-identity"
+if [[ -z "$signer" && -f "$signer_file" ]]; then
+  signer="$(cat "$signer_file")"
+  if [[ ! "$signer" =~ ^[0-9A-Fa-f]{40}$ ]]; then
+    echo "Некорректный отпечаток сертификата в $signer_file" >&2
+    exit 1
+  fi
+fi
+codesign --force --sign "${signer:--}" --timestamp=none "$APP"
+codesign --verify --deep --strict "$APP"
 
 echo "✓ Готово: $APP"
 

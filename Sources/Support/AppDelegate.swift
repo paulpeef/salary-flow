@@ -70,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    @MainActor func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = MeetingRecorder.shared
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         Log.endSession(reason: "выход из приложения")
     }
