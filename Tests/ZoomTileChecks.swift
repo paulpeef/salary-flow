@@ -25,10 +25,25 @@ func checkZoomTiles(_ check: (String, Bool) -> Void) {
     check("два увеличенных докладчика неоднозначны", MeetingZoomBanner.featuredTiles(thumbnails + [large, other], window: window).count == 2)
     var layout = MeetingAX.Layout(pid: 1, frame: window)
     layout.inspect(role: "AXButton", labels: ["Switch to speaker/gallery/multi-speaker view"])
-    check("команда смены раскладки не указывает текущий режим", layout.speakerView == nil)
+    check("команда смены раскладки не указывает текущий режим", layout.viewMode == nil)
     layout.inspect(role: "AXButton", labels: ["View options, Multi-speaker"])
+    layout.inspect(role: "AXButton", labels: ["Request captions, 6 of 14, not pinned"])
+    check("закрепление кнопки не мешает определять докладчика", !layout.fixedVideo)
+    layout.complete = true
+    for (name, mode): (String, MeetingAX.Layout.ViewMode) in [("Speaker", .speaker), ("Gallery", .gallery),
+        ("Dynamic gallery", .dynamicGallery), ("Immersive", .immersive), ("Multi-speaker", .multiSpeaker)] {
+        layout.inspect(role: "AXButton", labels: ["View options, " + name])
+        check("раскладка " + name, layout.viewMode == mode && layout.canUseFeaturedTile == (mode == .speaker))
+    }
+    let sideTile = MeetingAX.Tile(name: "A", frame: CGRect(x: -65, y: 115, width: 44, height: 50), windowFrame: window, pid: 1)
+    let stage = MeetingAX.Tile(name: "C", frame: CGRect(x: -320, y: 100, width: 240, height: 180), windowFrame: window, pid: 1)
+    check("Speaker с одной боковой миниатюрой", MeetingZoomBanner.featuredTiles([stage,sideTile], window: window, speakerView: true).map(\.name) == ["C"])
+    check("Speaker со скрытыми миниатюрами", MeetingZoomBanner.featuredTiles([stage], window: window, speakerView: true).map(\.name) == ["C"])
+    check("одиночная миниатюра не считается сценой", MeetingZoomBanner.featuredTiles([sideTile], window: window, speakerView: true).isEmpty)
+    check("имя из отдельного значения Accessibility", MeetingAX.statusName(role: "AXStaticText", description: "Active speaker", value: "Мария") == "Мария")
+    check("имя участника без признака речи не используется", MeetingAX.statusName(role: "AXGroup", description: "Participant", value: "Мария") == nil)
     layout.inspect(role: "AXGroup", labels: ["Example Person, Pinned"])
-    check("распознаны режим и закрепление", layout.speakerView == true && layout.fixedVideo)
+    check("распознаны режим и закрепление", layout.viewMode == .multiSpeaker && layout.fixedVideo)
     func read(frames: [CGRect], solid: Bool = false, occluded: CGRect = .null, confirmed: Bool = false, findOutlines: Bool = false) -> Set<String> {
         let w = 600, h = 480
         var bytes = [UInt8](repeating: 0, count: w*h*4)

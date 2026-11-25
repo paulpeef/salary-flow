@@ -159,13 +159,20 @@ enum MeetingZoomBanner {
 
     // Speaker view during screen sharing has a single landscape video panel.
     // The name badge stays in its lower left even when Zoom draws no border.
-    static func featuredTiles(_ tiles: [MeetingAX.Tile], window: CGRect) -> [MeetingAX.Tile] {
+    static func featuredTiles(_ tiles: [MeetingAX.Tile], window: CGRect, speakerView: Bool = false) -> [MeetingAX.Tile] {
         let visible = tiles.filter { window.intersects($0.frame) }
+        if speakerView, visible.count == 1, let tile = visible.first,
+           tile.frame.intersection(window).width >= window.width * 0.5,
+           tile.frame.intersection(window).height >= window.height * 0.5 { return visible }
         let ordered = visible.sorted { $0.frame.width > $1.frame.width }
         guard let first = ordered.first, let last = ordered.last,
               first.frame.width >= 1.5 * last.frame.width, first.frame.height >= 1.5 * last.frame.height else { return [] }
         let featured = ordered.prefix { $0.frame.width >= first.frame.width / 1.5 && $0.frame.height >= first.frame.height / 1.5 }
         let thumbnails = ordered.dropFirst(featured.count)
+        if speakerView, featured.count == 1, !thumbnails.isEmpty,
+           thumbnails.allSatisfy({ !first.frame.insetBy(dx: 3, dy: 3).intersects($0.frame) }) {
+            return [first]
+        }
         // Zoom can hide its View options button along with the toolbar. Its
         // speaker layout still has a distinct upper stage above smaller tiles.
         guard let bottom = featured.map({ $0.frame.maxY }).max(), thumbnails.count >= 2,
@@ -234,7 +241,8 @@ enum MeetingZoomBanner {
         let outlines = outlineRects(in: image, window: window).enumerated().map { i, rect in
             MeetingAX.Tile(name: String(i), frame: rect, windowFrame: window, pid: tiles[0].pid)
         }
-        let verified = highlighted(in: image, window: window, tiles: outlines)
+        // A menu can obscure one edge. Every inferred contour still needs its own roster-matched badge.
+        let verified = highlighted(in: image, window: window, tiles: outlines, captionConfirmed: true)
         var names = Set<String>()
         for outline in outlines where verified.contains(outline.name) {
             names.formUnion(badgeNames(at: outline.frame, in: image, window: window, roster: roster))
@@ -310,9 +318,8 @@ enum MeetingZoomBanner {
             if panel, (layout == nil || layout?.complete == true), let name = panelCaption(in: image, tiles: matching) {
                 return Observation(names: [name], status: "sharing-panel", capturedAt: capturedAt)
             }
-            if !panel, layout?.complete == true, layout?.speakerView != false,
-               layout?.mainMeeting == true || layout?.speakerView == true {
-                let featured = featuredTiles(matching, window: window.frame)
+            if !panel, layout?.canUseFeaturedTile == true {
+                let featured = featuredTiles(matching, window: window.frame, speakerView: layout?.viewMode == .speaker)
                 if featured.count > 1 { return Observation(status: "multiple-featured", capturedAt: capturedAt) }
                 if let tile = featured.first, badgeNames(at: tile.frame, in: image, window: window.frame, roster: [tile.name]) == [tile.name] {
                     return Observation(names: [tile.name], status: "featured-tile", capturedAt: capturedAt)

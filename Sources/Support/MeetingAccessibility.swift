@@ -88,6 +88,15 @@ enum MeetingAX {
         return nil
     }
 
+    static func statusName(role: String, description: String, value: String) -> String? {
+        guard ["AXStaticText", "AXGroup"].contains(role),
+              ["active speaker", "speaking", "talking", "говорит", "активный докладчик"]
+                .contains(description.trimmingCharacters(in: CharacterSet(charactersIn: ": ")).lowercased())
+        else { return nil }
+        guard value.contains(where: \.isLetter) else { return nil }
+        return speakerName("Speaking: " + value)
+    }
+
     struct Tile {
         let name: String
         let frame, windowFrame: CGRect
@@ -126,27 +135,43 @@ enum MeetingAX {
         let frame: CGRect?
         var floating = false
         var mainMeeting = false
-        var speakerView: Bool?
+        enum ViewMode: String {
+            case speaker, gallery, dynamicGallery, multiSpeaker, immersive, other
+        }
+        var viewMode: ViewMode?
         var fixedVideo = false
         var complete = false
+
+        var canUseFeaturedTile: Bool {
+            complete && !fixedVideo && (viewMode == .speaker || (viewMode == nil && mainMeeting))
+        }
 
         mutating func inspect(role: String, labels: [String]) {
             for label in labels where !label.isEmpty {
                 let lower = label.lowercased()
                 if role == "AXButton" {
                     let control = lower.components(separatedBy: .newlines)[0].trimmingCharacters(in: .whitespaces)
-                    if ["view options, multi-speaker", "view options, speaker", "view options, speaker view",
-                        "настройки просмотра, несколько докладчиков", "настройки просмотра, вид докладчика"].contains(control) {
-                        speakerView = true
-                    } else if control.hasPrefix("view options, ") || control.hasPrefix("настройки просмотра, ") {
-                        speakerView = false
+                    let fields = control.components(separatedBy: ", ")
+                    if fields.count >= 2, ["view options", "настройки просмотра"].contains(fields[0]) {
+                        switch fields[1] {
+                        case "speaker", "speaker view", "вид докладчика": viewMode = .speaker
+                        case "multi-speaker", "несколько докладчиков": viewMode = .multiSpeaker
+                        case "gallery", "gallery view", "галерея": viewMode = .gallery
+                        case "dynamic gallery", "динамическая галерея": viewMode = .dynamicGallery
+                        case "immersive", "immersive view", "иммерсивный вид": viewMode = .immersive
+                        default: viewMode = .other
+                        }
                     }
                     if ["show active speaker video", "показывать видеоизображение активного докладчика"].contains(control) {
                         floating = true
                     }
                 }
-                if ["pinned", "spotlighted", "remove pin", "remove spotlight", "закреплено", "удалить закрепление",
-                    "выделенные"].contains(where: lower.contains) { fixedVideo = true }
+                let fields = lower.components(separatedBy: CharacterSet(charactersIn: ",\n"))
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                if fields.contains(where: { ["remove pin", "remove spotlight", "удалить закрепление"].contains($0) }) ||
+                    (role != "AXButton" && fields.contains(where: { ["pinned", "spotlighted", "закреплено", "выделенные"].contains($0) })) {
+                    fixedVideo = true
+                }
             }
         }
     }
@@ -197,6 +222,10 @@ enum MeetingAX {
                     if let windowFrame = result.layouts[layout].frame, let name = tileName(role: text(node, "AXRoleDescription"), labels: labels),
                        let rect = frame(node) {
                         result.tiles.append(Tile(name: name, frame: rect, windowFrame: windowFrame, pid: running.processIdentifier))
+                    }
+                    if let name = statusName(role: role, description: labels[1], value: labels[2]) ??
+                        statusName(role: role, description: title, value: labels[2]) {
+                        result.names.insert(name)
                     }
                     for label in labels {
                         if let name = speakerName(label) { result.names.insert(name) }

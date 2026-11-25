@@ -12,6 +12,9 @@ enum MeetingChat {
         options: [.caseInsensitive])
 
     static func message(_ description: String) -> MeetingChatMessage? {
+        // Zoom inserts the historical date between body and clock in persistent chats.
+        if description.range(of: #",\s+(?:\d{1,2}\s+\p{L}{3,}\.?|\p{L}{3,}\.?\s+\d{1,2}),\s+\d{1,2}:\d{2}(?:\s*[AP]M)?(?:,\s*\d+ (?:repl|ответ).*)?$"#,
+                             options: [.regularExpression, .caseInsensitive]) != nil { return nil }
         let string = description as NSString
         guard let match = cellPattern.firstMatch(in: description, range: NSRange(location: 0, length: string.length)) else { return nil }
         func field(_ i: Int) -> String { string.substring(with: match.range(at: i)).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -23,8 +26,41 @@ enum MeetingChat {
     // Zoom sometimes omits the repeated sender and time in consecutive rows.
     // Verify the description against the body element before accepting one.
     static func continuation(_ description: String, body: String, after previous: MeetingChatMessage?) -> MeetingChatMessage? {
-        guard !body.isEmpty, description.trimmingCharacters(in: .whitespacesAndNewlines) == body + "," else { return nil }
-        return MeetingChatMessage(clock: "", author: previous?.author ?? "Автор не указан", body: body)
+        guard let previous, !body.isEmpty, description.trimmingCharacters(in: .whitespacesAndNewlines) == body + "," else { return nil }
+        return MeetingChatMessage(clock: "", author: previous.author, body: body)
+    }
+
+    // Only a system cell may establish a session boundary. Zoom prefixes
+    // earlier dates before the clock in historical meeting-start prompts.
+    static func sessionBoundary(_ prompt: String) -> Bool? {
+        let parts = prompt.lowercased().components(separatedBy: " - ")
+        guard parts.count == 2 else { return nil }
+        if parts[1].hasPrefix("meeting ended") || parts[1].hasPrefix("конференция завершена") { return false }
+        guard ["meeting started", "конференция началась", "конференция начата"].contains(parts[1]) else { return nil }
+        return minuteOfDay(parts[0]) != nil
+    }
+
+    private static func minuteOfDay(_ clock: String) -> Int? {
+        let compact = clock.uppercased().filter { !$0.isWhitespace }
+        let meridiem = compact.hasSuffix("PM") || compact.hasSuffix("AM")
+        let time = meridiem ? String(compact.dropLast(2)) : compact
+        let parts = time.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2, let hour = Int(parts[0]), let minute = Int(parts[1]),
+              (0..<60).contains(minute) else { return nil }
+        if meridiem {
+            guard (1...12).contains(hour) else { return nil }
+            return (hour % 12 + (compact.hasSuffix("PM") ? 12 : 0)) * 60 + minute
+        }
+        return (0..<24).contains(hour) ? hour * 60 + minute : nil
+    }
+
+    static func inRecording(_ clock: String, from start: Date, to end: Date, calendar: Calendar = .current) -> Bool {
+        guard let minute = minuteOfDay(clock), start <= end else { return false }
+        let floor = calendar.dateInterval(of: .minute, for: start)?.start ?? start
+        let match = DateComponents(hour: minute / 60, minute: minute % 60, second: 0)
+        guard let date = calendar.nextDate(after: floor.addingTimeInterval(-1), matching: match,
+                                           matchingPolicy: .strict) else { return false }
+        return date <= end
     }
 
     static func load(_ directory: URL) throws -> [MeetingChatMessage] {
@@ -116,7 +152,7 @@ enum MeetingChat {
     }
 
     // A nil snapshot means the public conversation could not be verified.
-    static func snapshot() -> [MeetingChatMessage]? {
+    static func snapshot(recordingStart: Date) -> [MeetingChatMessage]? {
         guard AXIsProcessTrusted() else { return nil }
         for id in MeetingAX.zoomIDs {
             for process in NSRunningApplication.runningApplications(withBundleIdentifier: id) {
@@ -126,14 +162,14 @@ enum MeetingChat {
                     let title = MeetingAX.text(window, "AXTitle").lowercased()
                     guard MeetingAX.text(window, "AXIdentifier") == "zm.meeting.window.main" ||
                             ["zoom meeting", "конференция zoom", "meeting chat", "чат конференции"].contains(title) else { continue }
-                    if let messages = snapshot(window) { return messages }
+                    if let messages = snapshot(window, recordingStart: recordingStart) { return messages }
                 }
             }
         }
         return nil
     }
 
-    private static func snapshot(_ window: AXUIElement) -> [MeetingChatMessage]? {
+    private static func snapshot(_ window: AXUIElement, recordingStart: Date) -> [MeetingChatMessage]? {
         var queue = [window], index = 0, controls = [AXUIElement](), tables = [AXUIElement]()
         let deadline = ProcessInfo.processInfo.systemUptime + 1.2
         while index < queue.count && index < 300 {
@@ -152,16 +188,34 @@ enum MeetingChat {
         guard index == queue.count, controls.count == 1, tables.count == 1, publicTab(controls[0]) else { return nil }
         let table = tables[0]
         let visibleRows = MeetingAX.children(table, "AXVisibleRows")
-        let rows = visibleRows.isEmpty ? MeetingAX.children(table) : visibleRows
+        let allRows = MeetingAX.children(table, "AXRows")
+        let rows = allRows.isEmpty ? (visibleRows.isEmpty ? MeetingAX.children(table) : visibleRows) : allRows
+        let visible = Set(visibleRows)
         var messages = [MeetingChatMessage]()
         var previous: MeetingChatMessage?
-        for row in rows {
-            guard let cell = MeetingAX.children(row).first(where: { MeetingAX.text($0, "AXIdentifier") == "ZMTextMessageCellView" }) else {
-                previous = nil
-                continue
+        let now = Date()
+        var first = rows.startIndex
+        var currentSession: Bool?
+        // Start at the newest row so scrolling up to a different call cannot
+        // make its start prompt the current boundary.
+        for i in rows.indices.reversed() {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { break }
+            if let prompt = MeetingAX.children(rows[i]).first(where: { MeetingAX.text($0, "AXIdentifier") == "ZMPromptMessageCellView" }),
+               let boundary = sessionBoundary(MeetingAX.text(prompt, "AXDescription")) {
+                first = i + 1
+                if !boundary || !allRows.isEmpty { currentSession = boundary }
+                break
             }
-            previous = readCell(cell, after: previous)
-            if let previous { messages.append(previous) }
+        }
+        for row in rows[first...] where visible.isEmpty || visible.contains(row) {
+            let cells = MeetingAX.children(row)
+            guard currentSession != false,
+                  let cell = cells.first(where: { MeetingAX.text($0, "AXIdentifier") == "ZMTextMessageCellView" }),
+                  let message = readCell(cell, after: previous),
+                  currentSession == true || message.clock.isEmpty || inRecording(message.clock, from: recordingStart, to: now)
+            else { previous = nil; continue }
+            previous = message
+            messages.append(message)
         }
         return publicTab(controls[0]) ? messages : nil
     }

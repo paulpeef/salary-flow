@@ -41,6 +41,11 @@ func checkMeetingTranscripts(_ check: (String, Bool) -> Void) {
     check("устойчивые имена внутри объединённого голоса ограничены наблюдаемыми словами",
           sustained.contains("[00:00:00] Ольга —") && sustained.contains("[00:00:06] Голос 1 —") &&
           sustained.contains("[00:00:08] Антон —") && sustained.contains("[00:00:14] Голос 1 —"))
+    let dominant = MeetingTranscript.render(mic: [], system: [MeetingWord(start: 23, end: 24, text: "Моя реплика.")],
+        turns: [MeetingVoice(start: 0, end: 29, voice: "a")],
+        samples: (0...20).map { sample($0, "Ольга") } + (22...28).map { sample($0, "Антон") },
+        micStart: date, systemStart: date)
+    check("устойчивая смена имени внутри интервала с доминирующим голосом", dominant.contains("Антон — Моя реплика."))
     let crossing = [MeetingWord(start: 1.8, end: 3.1, text: "Договорились.")]
     let uninterrupted = MeetingTranscript.render(mic: [], system: crossing, turns: [],
         samples: [1, 2, 3, 4].map { sample($0, "Ольга") }, micStart: date, systemStart: date)
@@ -74,6 +79,21 @@ func checkMeetingTranscripts(_ check: (String, Bool) -> Void) {
     let chat = MeetingChat.message("Ирина, Проверю, вот ссылка\nhttps://example.org, 10:52 PM, 1 reply, expanded")
     check("из ячейки общего чата сохраняются время, автор, текст и ссылка",
           chat == MeetingChatMessage(clock: "10:52 PM", author: "Ирина", body: "Проверю, вот ссылка\nhttps://example.org"))
+    check("служебные строки разделяют встречи в постоянном чате",
+          MeetingChat.sessionBoundary("23 Oct, 7:03 PM - Meeting ended: 1h 3m") == false &&
+          MeetingChat.sessionBoundary("23 Oct, 6:00 PM - Meeting started") == false &&
+          MeetingChat.sessionBoundary("4:30 PM - Meeting started") == true)
+    check("строка без автора требует предыдущего сообщения",
+          MeetingChat.continuation("ссылка,", body: "ссылка", after: nil) == nil)
+    check("дата старой встречи перед часами не попадает в тело", MeetingChat.message("Анна, Проверю, 23 Oct, 4:35 PM") == nil)
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(secondsFromGMT: 0)!
+    let midnight = Date(timeIntervalSince1970: 86400)
+    let start = midnight.addingTimeInterval(-90), end = midnight.addingTimeInterval(120)
+    check("часы чата проверяются с учётом полуночи",
+          MeetingChat.inRecording("11:59 PM", from: start, to: end, calendar: utc) &&
+          MeetingChat.inRecording("12:01 AM", from: start, to: end, calendar: utc) &&
+          !MeetingChat.inRecording("6:57 PM", from: start, to: end, calendar: utc))
     check("только выбранная общая вкладка", MeetingChat.everyoneTab(["Tab Everyone, selected, 1 of 2"], selected: nil) &&
           !MeetingChat.everyoneTab(["Everyone"], selected: false) && !MeetingChat.everyoneTab(["Tab Lena, selected"], selected: true))
     if let chat {

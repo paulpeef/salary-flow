@@ -239,7 +239,8 @@ import Foundation
     private var savedChat = [MeetingChatMessage]()
 
     private func readChat(_ directory: URL) async {
-        let snapshot = await Task.detached(priority: .utility) { MeetingChat.snapshot() }.value
+        guard let started = capture?.started else { return }
+        let snapshot = await Task.detached(priority: .utility) { MeetingChat.snapshot(recordingStart: started) }.value
         guard !Task.isCancelled, capture?.folder == directory else { return }
         guard let snapshot else {
             chatStatus = "Для записи чата открой «Все» (Everyone) в Zoom · сохранено: \(savedChat.count)"

@@ -203,13 +203,13 @@ enum MeetingTranscript {
                 speaker = "Несколько голосов"
             } else if let index = selected {
                 let voice = turns[index].voice
-                if let name = localLabels[index] ?? labels[voice] {
-                    speaker = name
-                } else if byVoice.count == 1, z < runs.count, runs[z].observations >= 5,
+                if byVoice.count == 1, z < runs.count, runs[z].observations >= 5,
                           runs[z].end - runs[z].start >= 5, runs[z].start <= word.start, runs[z].end >= word.end {
                     // A merged acoustic turn can span several people. A sustained
                     // Zoom observation applies only to the words it actually covers.
                     speaker = runs[z].name
+                } else if let name = localLabels[index] ?? labels[voice] {
+                    speaker = name
                 } else {
                     speaker = "Голос \(numbers[voice]!)"
                 }
