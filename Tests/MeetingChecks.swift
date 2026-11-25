@@ -86,3 +86,38 @@ func checkMeetingTranscripts(_ check: (String, Bool) -> Void) {
     check("имя во время собственной реплики не увеличивает число удалённых голосов",
           MeetingTranscript.minimumVoices(mic: remote, system: remote, samples: names, micStart: date, systemStart: date) == 0)
 }
+
+@MainActor func checkMeetingHistory(_ check: (String, Bool) -> Void) {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? fm.removeItem(at: root) }
+    let first = root.appending(path: "2026-11-24T08-01-55Z-AAAAAA")
+    let last = root.appending(path: "2026-11-24T09-30-27Z-BBBBBB")
+    do {
+        for dir in [first, last] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        let transcript = "[00:00:02] Участник — проверю завтра.\n\nЧат встречи\n[09:30] Участник — договорились."
+        let legacyFooter = "\n\nНаблюдения Salary Flow в Zoom\nZoom: 0 из 1 наблюдений с именем.\n[00:00:00] имя не видно"
+        try Data((transcript + legacyFooter).utf8).write(to: first.appending(path: "meeting.txt"))
+        let copiedLegacy = try MeetingProcessing.readTranscript(first)
+        check("копирование старой встречи убирает диагностику и сохраняет чат", copiedLegacy == transcript)
+        for file in ["mic.wav", "system.wav"] { try Data().write(to: last.appending(path: file)) }
+        let error = last.appending(path: "error.txt")
+        try Data("Обработка прервана. Spokenly недоступен.".utf8).write(to: error)
+        let failed = MeetingRecorder(directory: root, restoreSessions: true)
+        if case .failed(let reason) = failed.latestResult {
+            check("после перезапуска видна причина сбоя", reason == "Spokenly недоступен.")
+        } else { check("после перезапуска видна причина сбоя", false) }
+        check("при сбое новой встречи кнопка указывает на предыдущую с её датой",
+              failed.canCopy && failed.canRetry && failed.copiesEarlierMeeting &&
+              failed.transcriptDate == ISO8601DateFormatter().date(from: "2026-11-24T08:01:55Z"))
+        try fm.removeItem(at: error)
+        try Data(transcript.utf8).write(to: last.appending(path: "meeting.txt"))
+        let copied = try MeetingProcessing.readTranscript(last)
+        check("копирование новой встречи возвращает весь текст с чатом", copied == transcript)
+        let ready = MeetingRecorder(directory: root, restoreSessions: true)
+        check("новый результат доступен с датой последней встречи",
+              ready.canCopy && !ready.copiesEarlierMeeting && ready.latestMeetingDate == ready.transcriptDate)
+    } catch { check("чтение файлов тестовой встречи: " + error.localizedDescription, false) }
+}

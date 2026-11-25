@@ -76,6 +76,14 @@ enum MeetingProcessing {
         throw MeetingIssue("Аудиофайлы ещё записываются или пусты. Останови запись в Spokenly и повтори обработку.")
     }
 
+    static func readTranscript(_ directory: URL) throws -> String {
+        let text = try String(contentsOf: directory.appending(path: "meeting.txt"), encoding: .utf8)
+        // Older recordings included the Zoom diagnostics after the meeting chat.
+        let footer = "\n\nНаблюдения Salary Flow в Zoom\nZoom: "
+        guard let range = text.range(of: footer, options: .backwards) else { return text }
+        return String(text[..<range.lowerBound])
+    }
+
     static func process(_ directory: URL) async throws -> (String, String) {
         try await waitForClosedAudio(directory)
         let micFile = directory.appending(path: "mic.wav"), sysFile = directory.appending(path: "system.wav")
@@ -103,20 +111,8 @@ enum MeetingProcessing {
             (names.isEmpty ? "." : " (\(names.joined(separator: ", "))).")
         try (summary + "\n" + warning).write(to: directory.appending(path: "summary.txt"), atomically: true, encoding: .utf8)
         try transcript.write(to: directory.appending(path: "transcript.txt"), atomically: true, encoding: .utf8)
-        var timeline = [String](), previousNames: [String]?, previousDate: Date?
-        let baseline = min(micDate, sysDate)
-        for sample in samples {
-            let gap = previousDate.map { sample.time.timeIntervalSince($0) > 3 } ?? false
-            if sample.names != previousNames || gap {
-                let s = max(0, Int(sample.time.timeIntervalSince(baseline)))
-                let label = sample.names.isEmpty ? "имя не видно" : sample.names.joined(separator: ", ")
-                timeline.append(String(format: "[%02d:%02d:%02d] ", s / 3600, s / 60 % 60, s % 60) + label)
-            }
-            previousDate = sample.time
-            previousNames = sample.names
-        }
         let chat = try MeetingChat.load(directory)
-        let combined = transcript + MeetingChat.section(chat) + "\n\nНаблюдения Salary Flow в Zoom\n" + summary + "\n" + timeline.joined(separator: "\n")
+        let combined = transcript + MeetingChat.section(chat)
         try combined.write(to: directory.appending(path: "meeting.txt"), atomically: true, encoding: .utf8)
         try? FileManager.default.removeItem(at: directory.appending(path: "error.txt"))
         return (combined, [summary, warning].filter { !$0.isEmpty }.joined(separator: " "))

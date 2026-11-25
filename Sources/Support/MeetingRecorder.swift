@@ -2,9 +2,13 @@ import AppKit
 import Foundation
 
 @MainActor final class MeetingRecorder: ObservableObject {
-    static let shared = MeetingRecorder()
-    static let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appending(path: "SalaryFlow/Meetings")
+    static let shared = MeetingRecorder(
+        directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "SalaryFlow/Meetings"),
+        restoreSessions: Bundle.main.bundleIdentifier == "io.github.paulpeef.salaryflow"
+    )
+    private let directory: URL
+    private let restoreSessions: Bool
     private let recordings = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appending(path: "Spokenly/MeetingRecordings")
     @Published private(set) var enabled = UserDefaults.standard.object(forKey: "meetings.enabled") as? Bool ?? true
@@ -18,7 +22,6 @@ import Foundation
     @Published private(set) var recording = false
     @Published private(set) var busy = false
     @Published private(set) var status = ""
-    @Published private(set) var processingStatus = ""
     @Published private(set) var zoomStatus = ""
     @Published private(set) var lastFolder: URL?
     @Published var useBanner = UserDefaults.standard.bool(forKey: "meetings.zoomBanner") {
@@ -45,10 +48,37 @@ import Foundation
     @Published private(set) var chatStatus = ""
     private var chatMonitor: Task<Void, Never>?
     private var monitor: Task<Void, Never>?
-    private var pending: [URL] = []
-    private var processing: URL?
-    private var publishedResult: URL?
-    private var activeFile: URL { Self.root.appending(path: "active.json") }
+    @Published private var pending: [URL] = []
+    @Published private var processing: URL?
+    @Published private var publishedResult: URL?
+    @Published private var lastProcessingError: String?
+
+    enum ResultStatus {
+        case queued, processing, ready, missingAudio
+        case failed(String)
+    }
+
+    var latestResult: ResultStatus? {
+        guard let lastFolder, capture?.folder != lastFolder else { return nil }
+        if processing == lastFolder { return .processing }
+        if pending.contains(lastFolder) { return .queued }
+        if let lastProcessingError { return .failed(lastProcessingError) }
+        if publishedResult == lastFolder { return .ready }
+        if !hasAudio(lastFolder) { return .missingAudio }
+        return .failed("Обработка не завершилась. Можно запустить её повторно.")
+    }
+
+    var latestMeetingDate: Date? { lastFolder.flatMap(Self.meetingDate) }
+    var transcriptDate: Date? { publishedResult.flatMap(Self.meetingDate) }
+    var copiesEarlierMeeting: Bool { publishedResult != lastFolder }
+
+    private static func meetingDate(_ folder: URL) -> Date? {
+        // The directory starts with an ISO 8601 UTC stamp with dashes in the time.
+        let stamp = folder.lastPathComponent.prefix(20)
+        let time = stamp.dropFirst(11).replacingOccurrences(of: "-", with: ":")
+        return ISO8601DateFormatter().date(from: String(stamp.prefix(11)) + time)
+    }
+    private var activeFile: URL { directory.appending(path: "active.json") }
 
     var canChangeEnabled: Bool { !recording && !busy && processing == nil && pending.isEmpty }
 
@@ -59,19 +89,33 @@ import Foundation
         if value { restore() }
     }
 
-    private init() {
+    init(directory: URL, restoreSessions: Bool) {
+        self.directory = directory
+        self.restoreSessions = restoreSessions
         if enabled { restore() }
     }
 
     private func restore() {
-        guard Bundle.main.bundleIdentifier == "io.github.paulpeef.salaryflow" else { return }
+        guard restoreSessions else { return }
         Log.info("встречи: доступ к управлению у запущенной сборки: \(controlGranted)")
-        let dirs = (try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        let dirs = (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
         let sessions = dirs.filter { $0.lastPathComponent.hasPrefix("20") }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         lastFolder = sessions.last
+        lastProcessingError = lastFolder.flatMap { folder in
+            let file = folder.appending(path: "error.txt")
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+            let oldPrefix = "Обработка прервана. "
+            if text.contains("В Spokenly → Transcribe File выбери локальную Parakeet TDT или Whisper (.bin)") {
+                return "Прежняя версия отклонила модель Spokenly. Теперь можно повторить расшифровку с выбранной моделью."
+            }
+            let reason = text.hasPrefix(oldPrefix) ? String(text.dropFirst(oldPrefix.count)) : text
+            let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
         publishedResult = sessions.last { fm.fileExists(atPath: $0.appending(path: "meeting.txt").path) }
         if let data = try? Data(contentsOf: activeFile), let saved = try? JSONDecoder().decode(Capture.self, from: data) {
             capture = saved
+            lastFolder = saved.folder
             recording = true
             status = "Сеанс восстановлен. Проверь запись в Spokenly."
             startMonitor()
@@ -136,7 +180,7 @@ import Foundation
         let pid = try await spokenPID(launch: true)
         let now = Date()
         let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")
-        let dir = Self.root.appending(path: "\(stamp)-\(UUID().uuidString.prefix(6))")
+        let dir = directory.appending(path: "\(stamp)-\(UUID().uuidString.prefix(6))")
         let state = Capture(folder: dir, started: now, existing: sourceIDs())
         try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try Data().write(to: dir.appending(path: "zoom.jsonl"))
@@ -155,6 +199,7 @@ import Foundation
         }
         capture = state
         recording = true
+        lastProcessingError = nil
         lastFolder = dir
         status = "Жду появления аудиодорожек Spokenly…"
         startMonitor()
@@ -307,9 +352,6 @@ import Foundation
             if result == .sent, let presentation {
                 Task { await presentation.minimizeNewWindow() }
             }
-            if result == .sent && linked {
-                notice.show("Завершаю запись", detail: "Расшифровка начнётся автоматически.")
-            }
             if result == .sent && owned {
                 // Do not report stopped while Spokenly still writes this session.
                 try await MeetingProcessing.waitForClosedAudio(state.folder)
@@ -326,8 +368,14 @@ import Foundation
         capture = nil
         zoomStatus = ""
         lastFolder = state.folder
-        status = linked ? "Запись сохранена" : "Журнал Zoom сохранён. Обе дорожки Spokenly не найдены."
-        if linked { enqueue(state.folder) }
+        status = ""
+        if linked {
+            enqueue(state.folder)
+            notice.show("Аудио сохранено", detail: processing == state.folder ?
+                        "Началась расшифровка." : "Встреча ждёт расшифровки.", icon: "waveform")
+        } else {
+            notice.show("Аудиодорожки не найдены", detail: "Журнал Zoom сохранён.", icon: "exclamationmark.triangle")
+        }
     }
 
     func openFiles() {
@@ -335,11 +383,16 @@ import Foundation
     }
 
     func copyAgain() {
-        guard let dir = publishedResult, let text = try? String(contentsOf: dir.appending(path: "meeting.txt"), encoding: .utf8) else { return }
+        guard let dir = publishedResult else { return }
+        guard let text = try? MeetingProcessing.readTranscript(dir) else {
+            notice.show("Не удалось открыть расшифровку", detail: "Проверь файлы встречи.", icon: "exclamationmark.triangle")
+            return
+        }
         let ok = deliver(text, from: dir)
-        processingStatus = ok ? "Последняя встреча скопирована." : "Не удалось скопировать. Итог сохранён в meeting.txt."
-        notice.show(ok ? "Текст встречи скопирован" : "Текст сохранён в файле",
-                    detail: ok ? "Можно вставлять в ChatGPT." : "Открой файлы встречи или повтори копирование из капли.")
+        let meeting = Self.meetingDate(dir)?.formatted(date: .abbreviated, time: .shortened)
+        let detail = meeting.map { "Встреча · " + $0 } ?? "Текст в буфере обмена."
+        notice.show(ok ? "Текст скопирован" : "Не удалось скопировать",
+                    detail: ok ? detail : "Расшифровка сохранена в файле.", icon: ok ? "doc.on.doc" : "exclamationmark.triangle")
     }
     var canCopy: Bool { publishedResult != nil }
     var canRetry: Bool {
@@ -349,7 +402,7 @@ import Foundation
     func retry() {
         guard enabled, canRetry, let dir = lastFolder else { return }
         do { try Data().write(to: dir.appending(path: "pending"), options: .atomic); enqueue(dir) }
-        catch { processingStatus = error.localizedDescription }
+        catch { lastProcessingError = "Не удалось запустить обработку. " + error.localizedDescription }
     }
     private func enqueue(_ dir: URL) {
         if !pending.contains(dir) && processing != dir { pending.append(dir) }
@@ -364,19 +417,25 @@ import Foundation
         guard enabled, processing == nil, !pending.isEmpty else { return }
         let dir = pending.removeFirst()
         processing = dir
-        processingStatus = "Распознаю речь и сопоставляю голоса…"
         Task {
             do {
-                let (text, details) = try await Task.detached(priority: .utility) { try await MeetingProcessing.process(dir) }.value
-                publishedResult = dir
+                let (text, _) = try await Task.detached(priority: .utility) { try await MeetingProcessing.process(dir) }.value
+                if dir.lastPathComponent >= (publishedResult?.lastPathComponent ?? "") {
+                    publishedResult = dir
+                }
+                if dir == lastFolder { lastProcessingError = nil }
                 let verified = deliver(text, from: dir)
-                processingStatus = (verified ? "Текст с таймкодами скопирован. " : "Текст сохранён в meeting.txt. Не удалось скопировать в буфер. ") + details
-                notice.show(verified ? "Текст встречи скопирован" : "Текст сохранён в файле",
-                            detail: verified ? "Можно вставлять в ChatGPT." : "В капле доступна кнопка повторного копирования.")
+                notice.show("Расшифровка готова",
+                            detail: verified ? "Текст скопирован в буфер обмена." : "Текст сохранён в файле встречи.",
+                            icon: verified ? "checkmark.circle" : "doc.text")
             } catch {
-                processingStatus = "Обработка прервана. " + error.localizedDescription
-                notice.show("Расшифровка прервана", detail: "Открой каплю, чтобы посмотреть причину.")
-                try? processingStatus.write(to: dir.appending(path: "error.txt"), atomically: true, encoding: .utf8)
+                let reason = error.localizedDescription
+                if dir == lastFolder { lastProcessingError = reason }
+                Log.warn("встречи: \(dir.lastPathComponent), обработка прервана: \(reason)")
+                notice.show("Не удалось расшифровать встречу",
+                            detail: "Аудио сохранено. Причина указана в панели.",
+                            icon: "exclamationmark.triangle")
+                try? reason.write(to: dir.appending(path: "error.txt"), atomically: true, encoding: .utf8)
             }
             try? fm.removeItem(at: dir.appending(path: "pending"))
             processing = nil

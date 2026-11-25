@@ -2484,8 +2484,9 @@ do {
 // MARK: - Итог
 
 let meetingBoard = NSPasteboard.withUniqueName()
-let meetingSample = "[00:00:02] Участник — проверю завтра.\n\nНаблюдения Salary Flow в Zoom"
+let meetingSample = "[00:00:02] Участник — проверю завтра.\n\nЧат встречи\n[09:30] Участник — договорились."
 MainActor.assumeIsolated {
+    checkMeetingHistory { name, success in check(name, success) }
     check("доставка встречи подтверждает полный текст в буфере",
           MeetingClipboard.write(meetingSample, to: meetingBoard) && meetingBoard.string(forType: .string) == meetingSample)
 }
