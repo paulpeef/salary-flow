@@ -133,6 +133,43 @@ enum MeetingAX {
     struct Layout {
         let pid: pid_t
         let frame: CGRect?
+        var participantCounts = Set<Int>()
+        enum Camera { case on, off, unknown }
+        var roster = [String: Camera]()
+        var muted = Set<String>()
+        var markedSelf = Set<String>()
+        var localVideo: Bool?
+        var sharing = false
+
+        mutating func inspectTile(_ rawName: String, labels: [String]) {
+            var name = rawName
+            for suffix in [" (me)", " (you)", " (я)", " (вы)"] where name.lowercased().hasSuffix(suffix) {
+                name = String(name.dropLast(suffix.count))
+                markedSelf.insert(name)
+            }
+            let fields = labels.flatMap { $0.lowercased().components(separatedBy: CharacterSet(charactersIn: ",\n")) }
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            let on = fields.contains("video on") || fields.contains("видео включено")
+            let off = fields.contains("video off") || fields.contains("видео выключено")
+            roster[name] = on == off ? .unknown : (on ? .on : .off)
+            if fields.contains("computer audio muted") || fields.contains("phone audio muted") || fields.contains("микрофон выключен") {
+                muted.insert(name)
+            }
+        }
+
+        func peer(myName: String) -> String? {
+            guard complete, participantCounts == [2], roster.count == 2, !sharing, !floating else { return nil }
+            var local = markedSelf
+            let configured = myName.trimmingCharacters(in: .whitespacesAndNewlines)
+            local.formUnion(roster.keys.filter { $0.caseInsensitiveCompare(configured) == .orderedSame })
+            if let localVideo, !roster.values.contains(.unknown) {
+                let same = roster.keys.filter { roster[$0] == (localVideo ? .on : .off) }
+                if same.count == 1 { local.insert(same[0]) }
+            }
+            guard local.count == 1 else { return nil }
+            return roster.keys.first { !local.contains($0) && !muted.contains($0) }
+        }
+
         var floating = false
         var mainMeeting = false
         enum ViewMode: String {
@@ -149,9 +186,21 @@ enum MeetingAX {
         mutating func inspect(role: String, labels: [String]) {
             for label in labels where !label.isEmpty {
                 let lower = label.lowercased()
+                let firstLine = String(lower.prefix(while: { !$0.isNewline }))
+                if ["stop share", "stop sharing", "viewing ", "you are screen sharing", "остановить демонстрацию", "вы просматриваете"].contains(where: firstLine.hasPrefix)
+                    || firstLine.contains("is sharing their screen") { sharing = true }
                 if role == "AXButton" {
                     let control = lower.components(separatedBy: .newlines)[0].trimmingCharacters(in: .whitespaces)
+                    if ["stop video", "остановить видео", "выключить видео"].contains(control.components(separatedBy: ",").first ?? "") { localVideo = true }
+                    if ["start video", "начать видео", "включить видео"].contains(control.components(separatedBy: ",").first ?? "") { localVideo = false }
                     let fields = control.components(separatedBy: ", ")
+                    for field in fields {
+                        let parts = field.split(separator: " ")
+                        if parts.count == 2, let count = Int(parts[0]),
+                           ["participants", "participant", "участника", "участников", "участник"].contains(String(parts[1])) {
+                            participantCounts.insert(count)
+                        }
+                    }
                     if fields.count >= 2, ["view options", "настройки просмотра"].contains(fields[0]) {
                         switch fields[1] {
                         case "speaker", "speaker view", "вид докладчика": viewMode = .speaker
@@ -177,6 +226,12 @@ enum MeetingAX {
     }
 
     struct Reading {
+        func solePeer(myName: String) -> String? {
+            guard !layouts.contains(where: { $0.sharing || $0.floating }) else { return nil }
+            let meetings = layouts.filter { $0.mainMeeting || !$0.participantCounts.isEmpty }
+            guard meetings.count == 1 else { return nil }
+            return meetings[0].peer(myName: myName)
+        }
         var layouts = [Layout]()
         var tiles = [Tile]()
         var names = Set<String>()
@@ -219,9 +274,11 @@ enum MeetingAX {
                         return label.hasPrefix("chat list") || label.hasPrefix("список сообщений") || label.hasPrefix("список чата")
                     }) { continue }
                     result.layouts[layout].inspect(role: role, labels: labels)
-                    if let windowFrame = result.layouts[layout].frame, let name = tileName(role: text(node, "AXRoleDescription"), labels: labels),
-                       let rect = frame(node) {
-                        result.tiles.append(Tile(name: name, frame: rect, windowFrame: windowFrame, pid: running.processIdentifier))
+                    if let name = tileName(role: text(node, "AXRoleDescription"), labels: labels) {
+                        result.layouts[layout].inspectTile(name, labels: labels)
+                        if let windowFrame = result.layouts[layout].frame, let rect = frame(node) {
+                            result.tiles.append(Tile(name: name, frame: rect, windowFrame: windowFrame, pid: running.processIdentifier))
+                        }
                     }
                     if let name = statusName(role: role, description: labels[1], value: labels[2]) ??
                         statusName(role: role, description: title, value: labels[2]) {

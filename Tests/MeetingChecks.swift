@@ -2,6 +2,61 @@ import Foundation
 
 func checkMeetingTranscripts(_ check: (String, Bool) -> Void) {
     let date = Date(timeIntervalSince1970: 1_000)
+    let plain = MeetingClipboard.textForCopy("[00:00:05] Я — код [00:01:15]\n[00:02:00] Голос 1 — ответ\n\nЧат встречи\n[12:31:01] А — привет")
+    check("тайм-коды убраны только у реплик копии", plain == "Я — код [00:01:15]\nГолос 1 — ответ\n\nЧат встречи\n[12:31:01] А — привет")
+    var layout = MeetingAX.Layout(pid: 1, frame: nil)
+    layout.complete = true
+    layout.inspect(role: "AXButton", labels: ["Open participants panel, closed, 2 participants"])
+    layout.inspect(role: "AXButton", labels: ["Stop video"])
+    layout.inspectTile("Local", labels: ["Local, Computer audio unmuted, Video on"])
+    layout.inspectTile("Peer", labels: ["Peer, Computer audio unmuted, Video off"])
+    check("Zoom один на один распознаёт локальную камеру", layout.peer(myName: "") == "Peer")
+    check("противоречие в своей карточке блокирует подпись", layout.peer(myName: "Peer") == nil)
+    layout.inspect(role: "AXButton", labels: ["Open participants panel, closed, 3 participants"])
+    check("три участника и две видимые плитки не образуют пару", layout.peer(myName: "Local") == nil)
+    layout.participantCounts = [2]
+    layout.localVideo = nil
+    check("при одинаково возможных карточках нужно своё имя", layout.peer(myName: "") == nil && layout.peer(myName: " local ") == "Peer")
+    layout.inspect(role: "AXButton", labels: ["Stop share"])
+    check("демонстрация приостанавливает привязку один на один", layout.peer(myName: "Local") == nil)
+    func peerSample(_ t: Double, _ peer: String?) -> ZoomSample {
+        ZoomSample(time: date.addingTimeInterval(t), names: [], status: "screen-permission", windows: 1, nodes: 20, peer: peer)
+    }
+    let pairTest = MeetingTranscript.render(mic: [], system: [MeetingWord(start: 0.1, end: 0.5, text: "до"),
+        MeetingWord(start: 2.1, end: 2.5, text: "после"), MeetingWord(start: 7, end: 8, text: "разрыв")], turns: [],
+        samples: [peerSample(0, "Peer"), peerSample(1, "Peer"), peerSample(2, nil), peerSample(3, "Peer"), peerSample(10, "Peer")],
+        micStart: date, systemStart: date)
+    check("смена состава и пропуск наблюдения ограничивают имя", pairTest.contains("Peer — до") && !pairTest.contains("Peer — после") && !pairTest.contains("Peer — разрыв"))
+    let voiceTurns: [MeetingVoice] = (0..<5).map { i in
+        let start = Double(i * 10)
+        return MeetingVoice(start: start, end: start + 6, voice: String(i))
+    }
+    let voiceSamples = (0..<4).flatMap { i in (0...5).map { t in
+        ZoomSample(time: date.addingTimeInterval(Double(10*i+t)), names: [i < 2 ? "Anna" : "Boris"], status: "tile-border", windows: 1, nodes: 15)
+    } }
+    func matched(_ first: Float, _ second: Float, mic: [MeetingWord] = []) -> [MeetingVoice] {
+        var windows = [MeetingVoiceMatching.Window]()
+        for i in 0..<5 {
+            var vector = Array(repeating: Float.zero, count: 256)
+            if i == 4 { vector[0] = first; vector[1] = second }
+            else { vector[i < 2 ? 0 : 1] = 1 }
+            let start = Double(i * 10)
+            windows.append(.init(startTime: start, endTime: start + 5, embedding256: vector))
+        }
+        return MeetingVoiceMatching.annotate(voiceTurns, windows: windows, samples: voiceSamples, mic: mic, micStart: date, systemStart: date)
+    }
+    let attributed = MeetingTranscript.render(mic: [], system: [MeetingWord(start: 41, end: 42, text: "снова")],
+        turns: matched(1, 0), samples: voiceSamples, micStart: date, systemStart: date)
+    check("образцы из двух реплик называют тот же голос в новом кластере", attributed.contains("Anna — снова"))
+    check("похожие голоса остаются без имени", matched(1, 1).last?.matches == nil)
+    check("речь с микрофона исключена из голосового сопоставления", matched(1, 0, mic: [MeetingWord(start: 41, end: 42, text: "я")]).last?.matches == nil)
+    let crossingMatch = MeetingTranscript.render(mic: [], system: [MeetingWord(start: 44.8, end: 45.8, text: "граница")],
+        turns: matched(1, 0), samples: voiceSamples, micStart: date, systemStart: date)
+    check("голосовое имя остаётся в пределах образца", !crossingMatch.contains("Anna — граница"))
+    let competing = voiceSamples + (0...4).map { ZoomSample(time: date.addingTimeInterval(Double(40 + $0)), names: ["Boris"], status: "name", windows: 1, nodes: 5) }
+    let contradiction = MeetingTranscript.render(mic: [], system: [MeetingWord(start: 41, end: 42, text: "спорно")],
+        turns: matched(1, 0), samples: competing, micStart: date, systemStart: date)
+    check("конфликт визуальной и акустической подписи сохраняет номер", contradiction.contains("Голос 5 — спорно"))
     let turns = [
         MeetingVoice(start: 0, end: 6, voice: "a"), MeetingVoice(start: 7, end: 13, voice: "b"),
         MeetingVoice(start: 14, end: 20, voice: "a"), MeetingVoice(start: 21, end: 27, voice: "b"),

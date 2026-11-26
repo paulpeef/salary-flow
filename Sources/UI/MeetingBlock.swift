@@ -37,6 +37,14 @@ struct MeetingSettings: View {
                     MeetingControls(recorder: recorder, details: true)
                 }
                 Section("Говорящий в Zoom") {
+                    if recorder.readTileFrames || recorder.useBanner {
+                        Text(recorder.screenGranted ? "Доступ к экрану разрешён" : "Для чтения рамок и подписей нужен доступ к экрану.")
+                        if !recorder.screenGranted {
+                            Button("Разрешить доступ к экрану", action: recorder.requestScreenAccess)
+                        }
+                    }
+                    TextField("Моё имя в Zoom", text: $recorder.myZoomName)
+                        .help("Имя в списке участников помогает определить собеседника в звонке один на один.")
                     MeetingTileToggle(recorder: recorder)
                     Toggle("Читать подпись в верхней части окна Zoom", isOn: $recorder.useBanner)
                     Text("Кадры обрабатываются на Mac. В журнал попадают время и найденные имена.")
@@ -71,6 +79,9 @@ private struct MeetingControls: View {
                 if recorder.canCopy && (details || !recorder.recording) {
                     action(recorder.copiesEarlierMeeting ? "Скопировать предыдущую расшифровку" : "Скопировать расшифровку",
                            icon: "doc.on.doc", date: recorder.transcriptDate, run: recorder.copyAgain)
+                        .contextMenu {
+                            Button("Скопировать с тайм-кодами") { recorder.copyAgain(withTimecodes: true) }
+                        }
                 }
             }
             if let result = recorder.latestResult {

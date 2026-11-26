@@ -1,6 +1,15 @@
 import AppKit
 
 enum MeetingClipboard {
+    static func textForCopy(_ text: String) -> String {
+        let chat = text.range(of: "\n\nЧат встречи\n")
+        let speech = text[..<(chat?.lowerBound ?? text.endIndex)]
+        let plain = String(speech).replacingOccurrences(
+            of: #"(?m)^\[[0-9]{2,}:[0-5][0-9]:[0-5][0-9]\] (?=[^\n]+? — )"#,
+            with: "", options: .regularExpression)
+        return plain + (chat.map { String(text[$0.lowerBound...]) } ?? "")
+    }
+
     @MainActor static func write(_ text: String, to board: NSPasteboard = .general) -> Bool {
         board.clearContents()
         guard board.setString(text, forType: .string) else { return false }

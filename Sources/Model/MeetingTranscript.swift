@@ -7,12 +7,14 @@ struct MeetingWord: Codable {
 struct MeetingVoice: Codable {
     let start, end: Double
     let voice: String
+    var matches: [MeetingVoiceMatch]? = nil
 }
 struct ZoomSample: Codable {
     let time: Date
     let names: [String]
     let status: String
     let windows, nodes: Int
+    var peer: String? = nil
 }
 
 enum MeetingTranscript {
@@ -40,7 +42,18 @@ enum MeetingTranscript {
         let turns = turns.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
         let localWords = mic.sorted { $0.start < $1.start }
         var localIndex = 0
-        let samples = samples.sorted { $0.time < $1.time }.map { reading -> ZoomSample in
+        let chronological = samples.sorted { $0.time < $1.time }
+        var pairs = [MeetingVoiceMatch]()
+        for (a, b) in zip(chronological, chronological.dropFirst()) {
+            guard let peer = a.peer, peer == b.peer,
+                  b.time > a.time, b.time.timeIntervalSince(a.time) <= 2.5 else { continue }
+            let start = a.time.timeIntervalSince(systemStart), end = b.time.timeIntervalSince(systemStart)
+            if let last = pairs.last, last.name == peer, last.end == start {
+                pairs[pairs.count - 1] = MeetingVoiceMatch(start: last.start, end: end, name: peer)
+            } else { pairs.append(MeetingVoiceMatch(start: start, end: end, name: peer)) }
+        }
+        var pairIndex = 0
+        let samples = chronological.map { reading -> ZoomSample in
             let t = reading.time.timeIntervalSince(micStart)
             while localIndex < localWords.count && localWords[localIndex].end < t - 0.2 { localIndex += 1 }
             guard localIndex < localWords.count && localWords[localIndex].start <= t + 0.2 else { return reading }
@@ -198,9 +211,13 @@ enum MeetingTranscript {
                     turns[$0].end >= midpoint - 0.45 && turns[$0].start <= midpoint + 0.45 }
                 if Set(nearby.map { turns[$0].voice }).count == 1 { selected = strongest?.index ?? nearby.first }
             }
+            while pairIndex < pairs.count && pairs[pairIndex].end < word.start { pairIndex += 1 }
             var speaker = "Участник"
             if simultaneous {
                 speaker = "Несколько голосов"
+            } else if pairIndex < pairs.count, pairs[pairIndex].start <= word.start,
+                      word.end <= pairs[pairIndex].end {
+                speaker = pairs[pairIndex].name
             } else if let index = selected {
                 let voice = turns[index].voice
                 if byVoice.count == 1, z < runs.count, runs[z].observations >= 5,
@@ -208,10 +225,18 @@ enum MeetingTranscript {
                     // A merged acoustic turn can span several people. A sustained
                     // Zoom observation applies only to the words it actually covers.
                     speaker = runs[z].name
-                } else if let name = localLabels[index] ?? labels[voice] {
-                    speaker = name
                 } else {
-                    speaker = "Голос \(numbers[voice]!)"
+                    let visual = localLabels[index] ?? labels[voice]
+                    let overlapping = byVoice.count == 1 ? (turns[index].matches ?? []).filter {
+                        $0.start < word.end && $0.end > word.start
+                    } : []
+                    let acousticNames = Set(overlapping.map(\.name))
+                    let fullWindow = overlapping.contains { $0.start <= word.start && $0.end >= word.end }
+                    let acoustic = fullWindow && acousticNames.count == 1 ? acousticNames.first : nil
+                    // An independent acoustic profile must not silently contradict
+                    // a visual label or a competing, overlapping voice window.
+                    let conflict = acousticNames.count > 1 || visual.map { !acousticNames.subtracting([$0]).isEmpty } == true
+                    speaker = (conflict ? nil : (visual ?? acoustic)) ?? "Голос \(numbers[voice]!)"
                 }
             } else if byVoice.count <= 1, z < runs.count, runs[z].start <= word.start, runs[z].end >= word.end,
                       strongest.flatMap({ localLabels[$0.index] ?? labels[turns[$0.index].voice] }).map({ $0 == runs[z].name }) != false {

@@ -18,6 +18,17 @@ import Foundation
     @Published var minimizeSpokenly = UserDefaults.standard.object(forKey: "meetings.minimizeSpokenly") as? Bool ?? true {
         didSet { UserDefaults.standard.set(minimizeSpokenly, forKey: "meetings.minimizeSpokenly") }
     }
+    @Published private(set) var screenGranted = CGPreflightScreenCaptureAccess()
+    @Published var myZoomName = UserDefaults.standard.string(forKey: "meetings.myZoomName") ?? "" {
+        didSet { UserDefaults.standard.set(myZoomName, forKey: "meetings.myZoomName") }
+    }
+    func requestScreenAccess() {
+        screenGranted = CGRequestScreenCaptureAccess()
+        if !screenGranted, let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(settings)
+        }
+    }
+
     @Published private(set) var controlGranted = AXIsProcessTrusted()
     @Published private(set) var recording = false
     @Published private(set) var busy = false
@@ -27,13 +38,13 @@ import Foundation
     @Published var useBanner = UserDefaults.standard.bool(forKey: "meetings.zoomBanner") {
         didSet {
             UserDefaults.standard.set(useBanner, forKey: "meetings.zoomBanner")
-            if useBanner && !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
+            if useBanner { screenGranted = CGPreflightScreenCaptureAccess() }
         }
     }
     @Published var readTileFrames = UserDefaults.standard.bool(forKey: "meetings.zoomTileFrames") {
         didSet {
             UserDefaults.standard.set(readTileFrames, forKey: "meetings.zoomTileFrames")
-            if readTileFrames && !CGPreflightScreenCaptureAccess() { CGRequestScreenCaptureAccess() }
+            if readTileFrames { screenGranted = CGPreflightScreenCaptureAccess() }
         }
     }
     private struct Capture: Codable {
@@ -129,6 +140,7 @@ import Foundation
     private let controlHint = "Разреши управление для установленной SalaryFlow.app в Privacy & Security → Device Control and Data Access (Универсальный доступ)."
 
     func refreshControl() {
+        screenGranted = CGPreflightScreenCaptureAccess()
         controlGranted = AXIsProcessTrusted()
         if controlGranted && status == controlHint { status = "" }
     }
@@ -273,6 +285,12 @@ import Foundation
     private func startMonitor() {
         monitor?.cancel()
         guard let dir = capture?.folder else { return }
+        screenGranted = CGPreflightScreenCaptureAccess()
+        if (useBanner || readTileFrames) && !screenGranted && MeetingAX.zoomIDs.contains(where: {
+            !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty
+        }) {
+            notice.show("Нет доступа к экрану Zoom", detail: "Запись идёт. Разрешить чтение рамок можно в настройках записи встреч.")
+        }
         startChatMonitor(dir)
         monitor = Task {
             var n = 0
@@ -281,9 +299,14 @@ import Foundation
                     try bindAudio()
                     if hasAudio(dir) { status = "Идёт запись Spokenly" }
                     else if n >= 5 { status = "Spokenly ещё не создал обе дорожки. Проверь индикатор записи." }
-                    if n % 5 == 0 { announcements.refresh() }
+                    if n % 5 == 0 {
+                        announcements.refresh()
+                        if useBanner || readTileFrames { screenGranted = CGPreflightScreenCaptureAccess() }
+                    }
                     var sampleTime = Date()
                     var result = await Task.detached(priority: .utility) { MeetingAX.readZoom() }.value
+                    let rosterTime = Date()
+                    let peer = result.solePeer(myName: myZoomName)
                     if result.names.isEmpty, let (name, date) = announcements.latest, abs(date.timeIntervalSinceNow) < 1.3 {
                         result.names = [name]; result.status = "announcement"
                     }
@@ -295,14 +318,17 @@ import Foundation
                     }
                     guard !Task.isCancelled, capture?.folder == dir else { return }
                     let sample = ZoomSample(time: sampleTime, names: result.names.sorted(), status: result.status,
-                                            windows: result.windows, nodes: result.nodes)
+                                            windows: result.windows, nodes: result.nodes,
+                                            peer: abs(sampleTime.timeIntervalSince(rosterTime)) <= 1.0 ? peer : nil)
                     var bytes = try JSONEncoder().encode(sample)
                     bytes.append(10)
                     let handle = try FileHandle(forWritingTo: dir.appending(path: "zoom.jsonl"))
                     defer { try? handle.close() }
                     try handle.seekToEnd()
                     try handle.write(contentsOf: bytes)
-                    if sample.status == "sharing-panel", let name = sample.names.first {
+                    if let peer = sample.peer, sample.names.isEmpty {
+                        zoomStatus = "Собеседник в Zoom: " + peer
+                    } else if sample.status == "sharing-panel", let name = sample.names.first {
                         zoomStatus = "На плавающей плитке Zoom: " + name
                     } else if sample.status == "featured-tile", let name = sample.names.first {
                         zoomStatus = "На крупной плитке Zoom: " + name
@@ -383,13 +409,15 @@ import Foundation
         if let lastFolder { NSWorkspace.shared.open(lastFolder) }
     }
 
-    func copyAgain() {
+    func copyAgain() { copyAgain(withTimecodes: false) }
+
+    func copyAgain(withTimecodes: Bool) {
         guard let dir = publishedResult else { return }
         guard let text = try? MeetingProcessing.readTranscript(dir) else {
             notice.show("Не удалось открыть расшифровку", detail: "Проверь файлы встречи.", icon: "exclamationmark.triangle")
             return
         }
-        let ok = deliver(text, from: dir)
+        let ok = deliver(text, from: dir, withTimecodes: withTimecodes)
         let meeting = Self.meetingDate(dir)?.formatted(date: .abbreviated, time: .shortened)
         let detail = meeting.map { "Встреча · " + $0 } ?? "Текст в буфере обмена."
         notice.show(ok ? "Текст скопирован" : "Не удалось скопировать",
@@ -409,8 +437,8 @@ import Foundation
         if !pending.contains(dir) && processing != dir { pending.append(dir) }
         runQueue()
     }
-    private func deliver(_ text: String, from directory: URL) -> Bool {
-        let verified = MeetingClipboard.write(text)
+    private func deliver(_ text: String, from directory: URL, withTimecodes: Bool = false) -> Bool {
+        let verified = MeetingClipboard.write(withTimecodes ? text : MeetingClipboard.textForCopy(text))
         Log.info("встречи: \(directory.lastPathComponent), запись текста в буфер \(verified ? "подтверждена" : "не подтверждена")")
         return verified
     }

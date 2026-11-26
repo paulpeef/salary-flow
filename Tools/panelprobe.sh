@@ -16,7 +16,7 @@ swiftc -parse-as-library -O -F .build/sparkle -framework Sparkle \
   Sources/Model/Mood.swift Sources/Model/MoodStats.swift \
   Sources/Model/Reminders.swift Sources/Model/Browsers.swift \
   Sources/Model/FocusTimer.swift Sources/Model/Snippets.swift Sources/Model/AppModel.swift \
-  Sources/Model/MeetingTranscript.swift Sources/UI/MeetingBlock.swift \
+  Sources/Model/MeetingTranscript.swift Sources/Model/MeetingVoiceMatching.swift Sources/UI/MeetingBlock.swift \
   Sources/Support/MeetingAccessibility.swift Sources/Support/MeetingChat.swift Sources/Support/MeetingProcessing.swift \
   Sources/Support/MeetingZoomBanner.swift Sources/Support/MeetingRecorder.swift Sources/Support/MeetingDelivery.swift \
   Sources/UI/PanelView.swift Sources/UI/SettingsView.swift \

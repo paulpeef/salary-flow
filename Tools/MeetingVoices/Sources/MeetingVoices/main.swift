@@ -26,9 +26,10 @@ func localModels() async throws -> OfflineDiarizerModels {
 
 struct Turn: Encodable { let start, end: Float; let voice: String }
 do {
-    guard CommandLine.arguments.count == 4 else { throw CocoaError(.fileReadInvalidFileName) }
+    guard (4...5).contains(CommandLine.arguments.count) else { throw CocoaError(.fileReadInvalidFileName) }
     var config = OfflineDiarizerConfig.default
     if let minimum = Int(CommandLine.arguments[3]), minimum >= 2 { config.clustering.minSpeakers = minimum }
+    if CommandLine.arguments.count == 5 { config.embeddingExportPath = CommandLine.arguments[4] }
     let manager = OfflineDiarizerManager(config: config)
     manager.initialize(models: try await localModels())
     let result = try await manager.process(URL(fileURLWithPath: CommandLine.arguments[1]))

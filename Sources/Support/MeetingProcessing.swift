@@ -40,15 +40,24 @@ enum MeetingProcessing {
         return parsed.segments
     }
 
-    static func diarize(_ directory: URL, minimum: Int) throws -> [MeetingVoice] {
+    static func diarize(_ directory: URL, minimum: Int, samples: [ZoomSample], mic: [MeetingWord],
+                        micStart: Date, systemStart: Date) throws -> [MeetingVoice] {
         let output = directory.appending(path: "voices.json")
         if !FileManager.default.fileExists(atPath: output.path) {
             guard let helper = Bundle.main.url(forAuxiliaryExecutable: "MeetingVoices") else {
                 throw MeetingIssue("В сборке отсутствует модуль разделения голосов.")
             }
+            // Cache only turn boundaries and matched names with the meeting.
+            // Raw embedding vectors live in a private, per-run temporary folder.
+            let scratch = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let rawTurns = scratch.appending(path: "turns.json"), embeddings = scratch.appending(path: "embeddings.json")
+            let matchVoices = Set(samples.filter { $0.names.count == 1 && $0.peer == nil }.flatMap(\.names)).count >= 2
             let p = Process()
             p.executableURL = helper
-            p.arguments = [directory.appending(path: "system.wav").path, output.path, String(minimum)]
+            p.arguments = [directory.appending(path: "system.wav").path, rawTurns.path, String(minimum)]
+            if matchVoices { p.arguments?.append(embeddings.path) }
             p.standardOutput = FileHandle.nullDevice
             let log = directory.appending(path: "voices.log")
             FileManager.default.createFile(atPath: log.path, contents: nil)
@@ -58,6 +67,14 @@ enum MeetingProcessing {
             try p.run()
             p.waitUntilExit()
             guard p.terminationStatus == 0 else { throw MeetingIssue("Локальная модель голосов не завершила обработку. Подробности в voices.log.") }
+            var turns = try JSONDecoder().decode([MeetingVoice].self, from: Data(contentsOf: rawTurns))
+            if matchVoices, let data = try? Data(contentsOf: embeddings),
+               let windows = try? JSONDecoder().decode([MeetingVoiceMatching.Window].self, from: data) {
+                turns = MeetingVoiceMatching.annotate(turns, windows: windows, samples: samples, mic: mic,
+                                                     micStart: micStart, systemStart: systemStart)
+            }
+            try JSONEncoder().encode(turns).write(to: output, options: .atomic)
+            return turns
         }
         return try JSONDecoder().decode([MeetingVoice].self, from: Data(contentsOf: output))
     }
@@ -99,7 +116,7 @@ enum MeetingProcessing {
                                                      micStart: micDate, systemStart: sysDate)
         var warning = ""
         let turns: [MeetingVoice]
-        do { turns = try diarize(directory, minimum: minimum) } catch {
+        do { turns = try diarize(directory, minimum: minimum, samples: samples, mic: mic, micStart: micDate, systemStart: sysDate) } catch {
             turns = []
             warning = "Разделение голосов недоступно. " + error.localizedDescription
         }
@@ -107,8 +124,11 @@ enum MeetingProcessing {
                                                   micStart: micDate, systemStart: sysDate)
         guard !transcript.isEmpty else { throw MeetingIssue("Spokenly не нашёл речи в этих дорожках.") }
         let names = Set(samples.flatMap(\.names)).sorted()
-        let summary = "Zoom: \(samples.filter { !$0.names.isEmpty }.count) из \(samples.count) наблюдений с именем" +
+        var summary = "Zoom: \(samples.filter { !$0.names.isEmpty }.count) из \(samples.count) наблюдений с именем" +
             (names.isEmpty ? "." : " (\(names.joined(separator: ", "))).")
+        let pairCount = samples.filter { $0.peer != nil }.count
+        let matchedTurns = turns.filter { $0.matches?.isEmpty == false }.count
+        summary += " Состав один на один подтверждён в \(pairCount) наблюдениях. Голосовые совпадения найдены в \(matchedTurns) интервалах."
         try (summary + "\n" + warning).write(to: directory.appending(path: "summary.txt"), atomically: true, encoding: .utf8)
         try transcript.write(to: directory.appending(path: "transcript.txt"), atomically: true, encoding: .utf8)
         let chat = try MeetingChat.load(directory)
