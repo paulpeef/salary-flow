@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 
 func checkZoomTiles(_ check: (String, Bool) -> Void) {
     let parsed = MeetingAX.tileName(role: "Video render", labels: ["Example Person, Computer audio unmuted, Video on"])
@@ -35,6 +36,43 @@ func checkZoomTiles(_ check: (String, Bool) -> Void) {
         layout.inspect(role: "AXButton", labels: ["View options, " + name])
         check("раскладка " + name, layout.viewMode == mode && layout.canUseFeaturedTile == (mode == .speaker))
     }
+    var multi = layout
+    multi.mainMeeting = true
+    let imageWidth = 600, imageHeight = 480
+    let ctx = CGContext(data: nil, width: imageWidth, height: imageHeight, bitsPerComponent: 8, bytesPerRow: imageWidth * 4,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    ctx.setFillColor(gray: 0, alpha: 1)
+    ctx.fill(CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight))
+    let stageTile = MeetingAX.Tile(name: "Example Person", frame: large.frame, windowFrame: window, pid: 1)
+    let label = NSAttributedString(string: stageTile.name, attributes: [
+        .font: NSFont.systemFont(ofSize: 24), .foregroundColor: NSColor.white
+    ])
+    ctx.textPosition = CGPoint(x: (large.frame.minX - window.minX + 8) * 2,
+                               y: (window.maxY - large.frame.maxY + 8) * 2)
+    CTLineDraw(CTLineCreateWithAttributedString(label), ctx)
+    let screenshot = ctx.makeImage()!
+    func observe(_ layout: MeetingAX.Layout, _ stage: [MeetingAX.Tile]? = nil) -> MeetingZoomBanner.Observation? {
+        MeetingZoomBanner.featuredObservation(in: screenshot, window: window, tiles: thumbnails + (stage ?? [stageTile]), layout: layout)
+    }
+    check("Multi-speaker: одна крупная подписанная плитка без рамки", observe(multi)?.names == [stageTile.name])
+    let small = CGContext(data: nil, width: 300, height: 240, bitsPerComponent: 8, bytesPerRow: 300 * 4,
+                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    small.interpolationQuality = .high
+    small.draw(screenshot, in: CGRect(x: 0, y: 0, width: 300, height: 240))
+    check("Multi-speaker: мелкая подпись в уменьшенном кадре",
+          MeetingZoomBanner.featuredObservation(in: small.makeImage()!, window: window, tiles: thumbnails + [stageTile], layout: multi)?.names == [stageTile.name])
+    check("Multi-speaker: другое имя на крупной плитке", observe(multi, [large])?.status == "featured-unconfirmed")
+    check("Multi-speaker: два крупных участника", observe(multi, [stageTile,other])?.status == "multiple-featured")
+    check("Multi-speaker: равные плитки", observe(multi, []) == nil)
+    var guarded = multi
+    guarded.muted = [stageTile.name]
+    check("Multi-speaker: выключенный микрофон", observe(guarded)?.status == "featured-muted")
+    guarded = multi; guarded.fixedVideo = true
+    check("Multi-speaker: закреплённое видео", observe(guarded) == nil)
+    guarded = multi; guarded.sharing = true
+    check("Multi-speaker: демонстрация экрана", observe(guarded) == nil)
+    guarded = multi; guarded.complete = false
+    check("Multi-speaker: неполные данные Zoom", observe(guarded) == nil)
     let sideTile = MeetingAX.Tile(name: "A", frame: CGRect(x: -65, y: 115, width: 44, height: 50), windowFrame: window, pid: 1)
     let stage = MeetingAX.Tile(name: "C", frame: CGRect(x: -320, y: 100, width: 240, height: 180), windowFrame: window, pid: 1)
     check("Speaker с одной боковой миниатюрой", MeetingZoomBanner.featuredTiles([stage,sideTile], window: window, speakerView: true).map(\.name) == ["C"])

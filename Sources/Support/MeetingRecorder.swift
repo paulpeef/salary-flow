@@ -405,6 +405,8 @@ import Foundation
                     } else {
                         switch result.status {
                         case "multiple-featured": zoomStatus = "Zoom увеличил несколько плиток. Жду выделения одного говорящего."
+                        case "featured-unconfirmed": zoomStatus = "Вижу крупную плитку. Имя на ней пока не подтверждено."
+                        case "featured-muted": zoomStatus = "На крупной плитке выключен микрофон. Жду признака речи."
                         case "screen-permission": zoomStatus = "Разреши Salary Flow запись экрана в системных настройках macOS."
                         case "window-unavailable", "capture-failed": zoomStatus = "Окно встречи Zoom недоступно для чтения."
                         case "tile-window-unmatched": zoomStatus = "Вижу плитки, но не удалось сопоставить их с окном Zoom."

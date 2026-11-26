@@ -213,17 +213,42 @@ enum MeetingZoomBanner {
         let crop = CGRect(x: (frame.minX - window.minX) * sx, y: (frame.maxY - height - window.minY) * sy,
                           width: min(frame.width, 360) * sx, height: height * sy).integral
         guard let badge = image.cropping(to: crop) else { return [] }
-        let req = VNRecognizeTextRequest()
-        req.recognitionLevel = .accurate
-        req.recognitionLanguages = ["en-US", "ru-RU"]
-        req.usesLanguageCorrection = false
-        try? VNImageRequestHandler(cgImage: badge).perform([req])
-        let labels = (req.results ?? []).compactMap { line -> String? in
-            guard line.boundingBox.minX * CGFloat(badge.width) / sx <= 48,
-                  let text = line.topCandidates(1).first, text.confidence >= 0.7 else { return nil }
-            return text.string
+        func recognize(_ input: CGImage) -> Set<String> {
+            let req = VNRecognizeTextRequest()
+            req.recognitionLevel = .accurate
+            req.recognitionLanguages = ["en-US", "ru-RU"]
+            req.usesLanguageCorrection = false
+            try? VNImageRequestHandler(cgImage: input).perform([req])
+            let labels = (req.results ?? []).compactMap { line -> String? in
+                guard line.boundingBox.minX * CGFloat(badge.width) / sx <= 48,
+                      let text = line.topCandidates(1).first, text.confidence >= 0.7 else { return nil }
+                return text.string
+            }
+            return roster.filter { name in labels.contains { $0.caseInsensitiveCompare(name) == .orderedSame } }
         }
-        return roster.filter { name in labels.contains { $0.caseInsensitiveCompare(name) == .orderedSame } }
+        let names = recognize(badge)
+        // Small Zoom badges can fall below Vision's text-detection threshold
+        // when the window capture is scaled down. Retry only the same crop.
+        guard names.isEmpty, min(sx, sy) < 2 else { return names }
+        let width = badge.width * 2, heightPixels = badge.height * 2
+        guard let ctx = CGContext(data: nil, width: width, height: heightPixels, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return [] }
+        ctx.interpolationQuality = .high
+        ctx.draw(badge, in: CGRect(x: 0, y: 0, width: width, height: heightPixels))
+        guard let enlarged = ctx.makeImage() else { return [] }
+        return recognize(enlarged)
+    }
+
+    static func featuredObservation(in image: CGImage, window: CGRect, tiles: [MeetingAX.Tile], layout: MeetingAX.Layout) -> Observation? {
+        guard layout.canUseFeaturedTile else { return nil }
+        let featured = featuredTiles(tiles, window: window, speakerView: layout.viewMode == .speaker)
+        guard !featured.isEmpty else { return nil }
+        guard featured.count == 1, let tile = featured.first else { return Observation(status: "multiple-featured") }
+        guard !layout.muted.contains(tile.name) else { return Observation(status: "featured-muted") }
+        guard badgeNames(at: tile.frame, in: image, window: window, roster: [tile.name]) == [tile.name] else {
+            return Observation(status: "featured-unconfirmed")
+        }
+        return Observation(names: [tile.name], status: "featured-tile")
     }
 
     static func borderObservation(in image: CGImage, window: CGRect, tiles: [MeetingAX.Tile]) -> Observation? {
@@ -282,7 +307,7 @@ enum MeetingZoomBanner {
             let names = Set(named.flatMap(\.names))
             return Observation(names: names, status: names.count == 1 ? first.status : "ambiguous", capturedAt: first.capturedAt)
         }
-        if let sample = samples.first(where: { $0.status == "multiple-featured" }) { return sample }
+        if let sample = samples.first(where: { ["multiple-featured", "featured-unconfirmed", "featured-muted"].contains($0.status) }) { return sample }
         if let sample = samples.first(where: { $0.status == "no-border" }) { return sample }
         if samples.contains(where: { $0.status == "no-banner" }) {
             return Observation(status: readTiles && !reading.tiles.isEmpty ? "tile-window-unmatched" : "no-banner")
@@ -318,12 +343,9 @@ enum MeetingZoomBanner {
             if panel, (layout == nil || layout?.complete == true), let name = panelCaption(in: image, tiles: matching) {
                 return Observation(names: [name], status: "sharing-panel", capturedAt: capturedAt)
             }
-            if !panel, layout?.canUseFeaturedTile == true {
-                let featured = featuredTiles(matching, window: window.frame, speakerView: layout?.viewMode == .speaker)
-                if featured.count > 1 { return Observation(status: "multiple-featured", capturedAt: capturedAt) }
-                if let tile = featured.first, badgeNames(at: tile.frame, in: image, window: window.frame, roster: [tile.name]) == [tile.name] {
-                    return Observation(names: [tile.name], status: "featured-tile", capturedAt: capturedAt)
-                }
+            if !panel, let layout, var observation = featuredObservation(in: image, window: window.frame, tiles: matching, layout: layout) {
+                observation.capturedAt = capturedAt
+                return observation
             }
         }
         return Observation(names: banners, status: banners.isEmpty ? (matching.isEmpty ? "no-banner" : "no-border") : "banner", capturedAt: capturedAt)

@@ -180,7 +180,8 @@ enum MeetingAX {
         var complete = false
 
         var canUseFeaturedTile: Bool {
-            complete && !fixedVideo && (viewMode == .speaker || (viewMode == nil && mainMeeting))
+            complete && !fixedVideo && (viewMode == .speaker || (mainMeeting &&
+                (viewMode == nil || (viewMode == .multiSpeaker && !sharing))))
         }
 
         mutating func inspect(role: String, labels: [String]) {
