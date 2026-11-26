@@ -18,7 +18,11 @@ echo "→ Скачиваю Sparkle $SPARKLE_VERSION"
 rm -rf "$DEST"
 mkdir -p "$DEST"
 URL="https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
-curl -fsSL "$URL" | tar xJ -C "$DEST"
+archive=$(mktemp)
+trap 'rm -f "$archive"' EXIT
+curl -fsSL "$URL" -o "$archive"
+echo "015336b601493e05c237964954bff6191370003d94edefe663724c88840d73cc  $archive" | shasum -a 256 -c -
+tar xJf "$archive" -C "$DEST"
 
 # Тестовое приложение и символы в сборке не нужны — только фреймворк и утилиты.
 rm -rf "$DEST/Sparkle Test App.app" "$DEST/Symbols"

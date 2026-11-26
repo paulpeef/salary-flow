@@ -1,90 +1,87 @@
 name: Релиз
 
-# Собирает приложение и публикует его, когда появляется тег вида v1.2.
-# Ручной запуск оставлен для проверки сборки без публикации.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      sha256:
+        description: SHA-256 архива, подписанного на Mac владельца
+        required: true
+        type: string
 
 permissions:
   contents: write
+concurrency:
+  group: salary-flow-publication
+  cancel-in-progress: false
 
 jobs:
-  build:
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-      - name: Версия из тега
-        id: version
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [[ "$TAG" == v* ]]; then
-            echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=0.0.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Тесты и сборка
+      - name: Скачать и проверить подписанную сборку
         env:
-          VERSION: ${{ steps.version.outputs.value }}
-        run: ./build.sh
-
-      - name: Упаковка
-        id: package
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
+          GH_TOKEN: ${{ github.token }}
+          SHA256: ${{ inputs.sha256 }}
         run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+(\.[0-9]+)+$ && "$SHA256" =~ ^[0-9a-f]{64}$ ]]
+          version=${GITHUB_REF_NAME#v}
+          asset="SalaryFlow-$version.zip"
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          # Also handles retry after publication but before updating the feed.
+          git show origin/main:appcast.xml > "$RUNNER_TEMP/current.xml"
+          python3 - "$RUNNER_TEMP/current.xml" "$version" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          latest = ET.parse(sys.argv[1]).findtext('./channel/item/{http://www.andymatuschak.org/xml-namespaces/sparkle}version')
+          def parts(version): return tuple(map(int, version.split('.')))
+          if parts(sys.argv[2]) < parts(latest): sys.exit("Release older than current feed")
+          PY
           mkdir -p .build/release
-          # ditto, а не zip: сохраняет ресурсные вилки и симлинки внутри бандла,
-          # без них подписанный фреймворк на другой машине не запустится.
-          ditto -c -k --sequesterRsrc --keepParent \
-            .build/SalaryFlow.app ".build/release/SalaryFlow-$VERSION.zip"
-          echo "zip=.build/release/SalaryFlow-$VERSION.zip" >> "$GITHUB_OUTPUT"
+          gh release download "$GITHUB_REF_NAME" --pattern "$asset" --dir .build/release
+          echo "$SHA256  .build/release/$asset" | shasum -a 256 -c -
+          ditto -x -k ".build/release/$asset" "$RUNNER_TEMP/payload"
+          ./Tools/verify-release-app.sh "$RUNNER_TEMP/payload/SalaryFlow.app" "$version"
+          ./Tools/fetch-sparkle.sh
 
-      - name: Подпись обновления и appcast
+      - name: Подписать обновление для Sparkle
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
-          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
-            echo "::error::Нет секрета SPARKLE_PRIVATE_KEY — обновления подписать нечем."
-            exit 1
-          fi
-          printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_key
-          .build/sparkle/bin/generate_appcast \
-            --ed-key-file /tmp/sparkle_key \
-            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/" \
+          set -euo pipefail
+          : "${SPARKLE_PRIVATE_KEY:?Missing Sparkle key}"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | .build/sparkle/bin/generate_appcast \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
             .build/release
-          rm -f /tmp/sparkle_key
-          cp .build/release/appcast.xml appcast.xml
-          cat appcast.xml
+          version=${GITHUB_REF_NAME#v}
+          swift Tools/verify-release-feed.swift .build/release/appcast.xml ".build/release/SalaryFlow-$version.zip" "$version"
 
-      - name: Публикация релиза
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Опубликовать проверенный архив и ленту
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA256: ${{ inputs.sha256 }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "Salary Flow $GITHUB_REF_NAME" \
-            --notes "Скачайте архив, распакуйте и перенесите Salary Flow в «Программы». При первом запуске — правый клик по приложению и «Открыть»: сборка подписана самодельной подписью, без сертификата Apple." \
-            "${{ steps.package.outputs.zip }}"
-
-      - name: Обновление appcast в main
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
+          asset="SalaryFlow-${GITHUB_REF_NAME#v}.zip"
+          release=$(gh release view "$GITHUB_REF_NAME" --json assets,isDraft)
+          jq -e --arg file "$asset" --arg digest "sha256:$SHA256" \
+            '(.assets | length) == 1 and .assets[0].name == $file and .assets[0].digest == $digest' <<< "$release"
+          if [[ $(jq -r '.isDraft' <<< "$release") == true ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false
+          fi
           git fetch origin main
-          git checkout main
+          git checkout -B main origin/main
           cp .build/release/appcast.xml appcast.xml
-          # Сравнивать надо после add: у неотслеживаемого файла `git diff`
-          # изменений не видит и молча возвращает успех. Первый релиз так
-          # и прошёл — appcast остался неопубликованным, а шаг отчитался зелёным.
           git add appcast.xml
-          if git diff --cached --quiet; then
-            echo "appcast не изменился"
-          else
-            git commit -m "appcast для ${GITHUB_REF_NAME}"
-            git push origin main
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -m "appcast для $GITHUB_REF_NAME"
+            git push origin HEAD:main
           fi
