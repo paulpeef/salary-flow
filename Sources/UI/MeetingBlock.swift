@@ -69,23 +69,85 @@ private struct MeetingTileToggle: View {
 private struct MeetingControls: View {
     @ObservedObject var recorder: MeetingRecorder
     var details = false
+    @State private var showingRecordingDetails = false
 
     var body: some View {
+        if details {
+            controls
+        } else {
+            // Size the menu-bar block once for the usual two rows. SwiftUI's
+            // native menu-bar window can leave its backdrop at the old height
+            // when the recorder adds or removes rows while the panel is open.
+            VStack(alignment: .leading, spacing: 4) {
+                action("Записать встречу", icon: "waveform.circle", run: {})
+                action("Скопировать расшифровку", icon: "doc.on.doc",
+                       date: .distantPast, run: {})
+            }
+            .hidden()
+            .accessibilityHidden(true)
+            .overlay(alignment: .topLeading) {
+                if recorder.recording {
+                    VStack(alignment: .leading, spacing: 4) {
+                        action("Остановить запись", icon: "stop.circle.fill", run: recorder.toggle)
+                            .disabled(recorder.busy)
+                        action("Состояние записи", icon: "info.circle", subtitle: recordingSummary) {
+                            showingRecordingDetails = true
+                        }
+                        .popover(isPresented: $showingRecordingDetails) {
+                            recordingDetails.padding(12).frame(width: 300, alignment: .leading)
+                        }
+                    }
+                } else {
+                    ViewThatFits(in: .vertical) {
+                        controls
+                        ScrollView { controls }
+                    }
+                }
+            }
+        }
+    }
+
+    private var recordingSummary: String {
+        if !recorder.zoomStatus.isEmpty { return recorder.zoomStatus }
+        return recorder.status.isEmpty ? "Spokenly и Zoom" : recorder.status
+    }
+
+    private var recordingDetails: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !recorder.status.isEmpty { Text(recorder.status) }
+            if !recorder.zoomStatus.isEmpty { Text(recorder.zoomStatus) }
+            if !recorder.chatStatus.isEmpty { Text(recorder.chatStatus) }
+            MeetingTileToggle(recorder: recorder)
+        }
+        .font(.caption)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var controls: some View {
+        let result = recorder.latestResult
+        let showResultFirst = !details && recorder.copiesEarlierMeeting && result != nil
+        return VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 action(recorder.recording ? "Остановить запись" : "Записать встречу",
                        icon: recorder.recording ? "stop.circle.fill" : "waveform.circle",
                        run: recorder.toggle)
                     .disabled(recorder.busy)
+                if showResultFirst, let result {
+                    resultCard(result)
+                }
                 if recorder.canCopy && (details || !recorder.recording) {
                     action(recorder.copiesEarlierMeeting ? "Скопировать предыдущую расшифровку" : "Скопировать расшифровку",
                            icon: "doc.on.doc", date: recorder.transcriptDate, run: recorder.copyAgain)
                         .contextMenu {
                             Button("Скопировать с тайм-кодами") { recorder.copyAgain(withTimecodes: true) }
                         }
+                } else if !details && !recorder.recording && result == nil && recorder.status.isEmpty {
+                    action("Скопировать расшифровку", icon: "doc.on.doc",
+                           subtitle: "Появится после записи", run: recorder.copyAgain)
+                        .disabled(true)
                 }
             }
-            if let result = recorder.latestResult {
+            if !showResultFirst, let result {
                 resultCard(result)
             }
             if !recorder.status.isEmpty {
@@ -96,9 +158,6 @@ private struct MeetingControls: View {
             }
             if recorder.recording, !recorder.chatStatus.isEmpty {
                 Text(recorder.chatStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            if !details && recorder.recording {
-                MeetingTileToggle(recorder: recorder)
             }
             if details {
                 HStack {
@@ -118,7 +177,8 @@ private struct MeetingControls: View {
         }
     }
 
-    private func action(_ title: String, icon: String, date: Date? = nil, run: @escaping () -> Void) -> some View {
+    private func action(_ title: String, icon: String, date: Date? = nil, subtitle: String? = nil,
+                        run: @escaping () -> Void) -> some View {
         Button(action: run) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
@@ -127,11 +187,15 @@ private struct MeetingControls: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let date {
-                        Text(date, format: .dateTime.day().month(.abbreviated).hour().minute())
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    Group {
+                        if let date {
+                            Text(date, format: .dateTime.day().month(.abbreviated).hour().minute())
+                        } else if let subtitle {
+                            Text(subtitle).lineLimit(1)
+                        }
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

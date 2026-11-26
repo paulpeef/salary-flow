@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 func checkMeetingTranscripts(_ check: (String, Bool) -> Void) {
     let date = Date(timeIntervalSince1970: 1_000)
@@ -202,5 +203,11 @@ func checkMeetingTranscripts(_ check: (String, Bool) -> Void) {
         let ready = MeetingRecorder(directory: root, restoreSessions: true)
         check("новый результат доступен с датой последней встречи",
               ready.canCopy && !ready.copiesEarlierMeeting && ready.latestMeetingDate == ready.transcriptDate)
+        let empty = MeetingRecorder(directory: root, restoreSessions: false)
+        let heights = [empty, failed, ready].map { recorder in
+            NSHostingView(rootView: MeetingBlock(recorder: recorder).frame(width: 312)).fittingSize.height
+        }
+        check("блок встреч сохраняет высоту панели при появлении результата или ошибки",
+              heights[0] > 0 && Set(heights).count == 1)
     } catch { check("чтение файлов тестовой встречи: " + error.localizedDescription, false) }
 }

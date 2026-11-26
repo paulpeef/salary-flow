@@ -18,7 +18,7 @@ swiftc -O \
   Sources/Support/Log.swift \
   Sources/Support/PrivacyMonitor.swift \
   Sources/Support/MeetingDelivery.swift Sources/Support/MeetingAccessibility.swift Sources/Support/MeetingChat.swift Sources/Support/MeetingZoomBanner.swift Tests/ZoomTileChecks.swift \
-  Sources/Support/MeetingProcessing.swift Sources/Support/MeetingRecorder.swift \
+  Sources/UI/MeetingBlock.swift Sources/UI/MeetingExtraSettings.swift Sources/Support/MeetingProcessing.swift Sources/Support/MeetingRecorder.swift \
   Sources/Model/MeetingTranscript.swift Sources/Model/MeetingVoiceMatching.swift Sources/Support/MeetingReference.swift Sources/Support/MeetingGoogle.swift Tests/MeetingChecks.swift Tests/MeetingIntegrationChecks.swift \
   Tests/main.swift \
   -o "$BUILD/EngineTests"
