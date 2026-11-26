@@ -2493,6 +2493,7 @@ MainActor.assumeIsolated {
 meetingBoard.releaseGlobally()
 checkZoomTiles { name, success in check(name, success) }
 checkMeetingTranscripts { name, success in check(name, success) }
+checkMeetingIntegrations { name, success in check(name, success) }
 
 if failures.isEmpty {
     print("✅ Все проверки пройдены (\(checks))")

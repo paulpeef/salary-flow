@@ -226,6 +226,12 @@ enum MeetingAX {
     }
 
     struct Reading {
+        var visibleRoster: [String]? {
+            let meetings = layouts.filter { $0.mainMeeting || !$0.participantCounts.isEmpty }
+            guard meetings.count == 1, meetings[0].complete, !meetings[0].roster.isEmpty else { return nil }
+            return meetings[0].roster.keys.sorted()
+        }
+
         func solePeer(myName: String) -> String? {
             guard !layouts.contains(where: { $0.sharing || $0.floating }) else { return nil }
             let meetings = layouts.filter { $0.mainMeeting || !$0.participantCounts.isEmpty }

@@ -50,6 +50,7 @@ struct MeetingSettings: View {
                     Text("Кадры обрабатываются на Mac. В журнал попадают время и найденные имена.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                MeetingExtraSettings(recorder: recorder)
             }
         }
         .formStyle(.grouped)

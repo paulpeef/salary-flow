@@ -15,6 +15,17 @@ struct ZoomSample: Codable {
     let status: String
     let windows, nodes: Int
     var peer: String? = nil
+    var roster: [String]? = nil
+}
+
+struct AttributedWord: Codable {
+    let start, end: Double
+    let speaker, text: String
+
+    var named: Bool {
+        speaker != "Участник" && speaker != "Несколько голосов" &&
+            speaker.range(of: #"^Голос [0-9]+$"#, options: .regularExpression) == nil
+    }
 }
 
 enum MeetingTranscript {
@@ -38,7 +49,8 @@ enum MeetingTranscript {
     // Sorted inputs, forward-only cursors. A two-hour call contains tens of
     // thousands of word timestamps; avoid scanning all turns for each word.
     static func render(mic: [MeetingWord], system: [MeetingWord], turns: [MeetingVoice],
-                       samples: [ZoomSample], micStart: Date, systemStart: Date) -> String {
+                       samples: [ZoomSample], micStart: Date, systemStart: Date,
+                       collectWords: (([AttributedWord]) -> Void)? = nil) -> String {
         let turns = turns.filter { $0.end > $0.start }.sorted { $0.start < $1.start }
         let localWords = mic.sorted { $0.start < $1.start }
         var localIndex = 0
@@ -276,6 +288,10 @@ enum MeetingTranscript {
                 k += 1
             }
             if !conflict { for j in first..<cursor { remoteTokens[j].speaker = left.speaker } }
+        }
+        if let collectWords {
+            collectWords(remoteTokens.map { AttributedWord(start: $0.start - systemOffset, end: $0.end - systemOffset,
+                                                          speaker: $0.speaker, text: $0.text) })
         }
         // Assemble each channel first so simultaneous speech keeps both sentences intact.
         func phrases(_ tokens: [Token]) -> [Token] {

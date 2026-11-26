@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 
 @MainActor final class MeetingRecorder: ObservableObject {
@@ -7,6 +8,71 @@ import Foundation
             .appending(path: "SalaryFlow/Meetings"),
         restoreSessions: Bundle.main.bundleIdentifier == "io.github.paulpeef.salaryflow"
     )
+    @Published var useSavedVoices = UserDefaults.standard.bool(forKey: "meetings.savedVoices") {
+        didSet {
+            UserDefaults.standard.set(useSavedVoices, forKey: "meetings.savedVoices")
+            if !useSavedVoices { voiceExamples = [:]; stopPreview() }
+        }
+    }
+    @Published private(set) var voiceExamples = [String: [VoiceExample]]()
+    @Published private(set) var savedVoices = [String: [[Float]]]()
+    @Published var toolsStatus = ""
+    private var examplesDirectory: URL?
+    private var player: AVAudioPlayer?
+    private var stopPlayback: Task<Void, Never>?
+    private var profilesFile: URL { directory.deletingLastPathComponent().appending(path: "zoom-voice-profiles-v1.json") }
+
+    private func stopPreview() {
+        stopPlayback?.cancel()
+        player?.stop()
+        player = nil
+    }
+
+    func preview(_ name: String, index: Int) {
+        guard let clips = voiceExamples[name], clips.indices.contains(index), let examplesDirectory else { return }
+        stopPreview()
+        let clip = clips[index]
+        do {
+            let audio = try AVAudioPlayer(contentsOf: examplesDirectory.appending(path: "system.wav"))
+            player = audio
+            audio.currentTime = clip.start
+            guard audio.play() else { throw MeetingIssue("Проверь устройство воспроизведения.") }
+            stopPlayback = Task {
+                try? await Task.sleep(nanoseconds: UInt64(min(8, clip.end - clip.start) * 1e9))
+                if !Task.isCancelled { audio.stop() }
+            }
+        } catch { toolsStatus = "Ошибка воспроизведения. " + error.localizedDescription }
+    }
+
+    func saveProfile(_ name: String) {
+        guard useSavedVoices, let clips = voiceExamples[name], clips.count >= 2 else { return }
+        var updated = savedVoices
+        updated[name] = clips.map(\.vector)
+        if writeProfiles(updated) { voiceExamples.removeValue(forKey: name); toolsStatus = "Голос сохранён на этом Mac." }
+    }
+
+    func removeProfile(_ name: String) {
+        var updated = savedVoices
+        updated.removeValue(forKey: name)
+        if writeProfiles(updated) { toolsStatus = "Голосовой профиль удалён." }
+    }
+
+    private func writeProfiles(_ profiles: [String: [[Float]]]) -> Bool {
+        do {
+            // Atomic replacement inherits the private permissions of this staging file.
+            let folder = profilesFile.deletingLastPathComponent()
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let temp = folder.appending(path: UUID().uuidString)
+            defer { try? fm.removeItem(at: temp) }
+            guard fm.createFile(atPath: temp.path, contents: try JSONEncoder().encode(profiles),
+                                attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
+            if fm.fileExists(atPath: profilesFile.path) { _ = try fm.replaceItemAt(profilesFile, withItemAt: temp, options: .usingNewMetadataOnly) }
+            else { try fm.moveItem(at: temp, to: profilesFile) }
+            savedVoices = profiles
+            return true
+        } catch { toolsStatus = error.localizedDescription; return false }
+    }
+
     private let directory: URL
     private let restoreSessions: Bool
     private let recordings = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -103,6 +169,8 @@ import Foundation
     init(directory: URL, restoreSessions: Bool) {
         self.directory = directory
         self.restoreSessions = restoreSessions
+        if restoreSessions, let data = try? Data(contentsOf: profilesFile),
+           let profiles = try? JSONDecoder().decode([String: [[Float]]].self, from: data) { savedVoices = profiles }
         if enabled { restore() }
     }
 
@@ -319,7 +387,7 @@ import Foundation
                     guard !Task.isCancelled, capture?.folder == dir else { return }
                     let sample = ZoomSample(time: sampleTime, names: result.names.sorted(), status: result.status,
                                             windows: result.windows, nodes: result.nodes,
-                                            peer: abs(sampleTime.timeIntervalSince(rosterTime)) <= 1.0 ? peer : nil)
+                                            peer: abs(sampleTime.timeIntervalSince(rosterTime)) <= 1.0 ? peer : nil, roster: result.visibleRoster)
                     var bytes = try JSONEncoder().encode(sample)
                     bytes.append(10)
                     let handle = try FileHandle(forWritingTo: dir.appending(path: "zoom.jsonl"))
@@ -446,11 +514,18 @@ import Foundation
         guard enabled, processing == nil, !pending.isEmpty else { return }
         let dir = pending.removeFirst()
         processing = dir
+        let prepareProfiles = useSavedVoices
+        let saved = prepareProfiles ? savedVoices : [:]
         Task {
             do {
-                let (text, _) = try await Task.detached(priority: .utility) { try await MeetingProcessing.process(dir) }.value
+                let (text, examples) = try await Task.detached(priority: .utility) {
+                    try await MeetingProcessing.process(dir, saved: saved, prepareProfiles: prepareProfiles)
+                }.value
                 if dir.lastPathComponent >= (publishedResult?.lastPathComponent ?? "") {
                     publishedResult = dir
+                    stopPreview()
+                    voiceExamples = useSavedVoices ? examples : [:]
+                    examplesDirectory = dir
                 }
                 if dir == lastFolder { lastProcessingError = nil }
                 let verified = deliver(text, from: dir)

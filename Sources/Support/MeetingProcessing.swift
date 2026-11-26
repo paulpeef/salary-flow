@@ -41,7 +41,8 @@ enum MeetingProcessing {
     }
 
     static func diarize(_ directory: URL, minimum: Int, samples: [ZoomSample], mic: [MeetingWord],
-                        micStart: Date, systemStart: Date) throws -> [MeetingVoice] {
+                        micStart: Date, systemStart: Date, saved: [String: [[Float]]],
+                        enrollment: (([String: [VoiceExample]]) -> Void)?) throws -> [MeetingVoice] {
         let output = directory.appending(path: "voices.json")
         if !FileManager.default.fileExists(atPath: output.path) {
             guard let helper = Bundle.main.url(forAuxiliaryExecutable: "MeetingVoices") else {
@@ -53,7 +54,7 @@ enum MeetingProcessing {
             try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
             defer { try? FileManager.default.removeItem(at: scratch) }
             let rawTurns = scratch.appending(path: "turns.json"), embeddings = scratch.appending(path: "embeddings.json")
-            let matchVoices = Set(samples.filter { $0.names.count == 1 && $0.peer == nil }.flatMap(\.names)).count >= 2
+            let matchVoices = !saved.isEmpty || enrollment != nil || Set(samples.filter { $0.names.count == 1 && $0.peer == nil }.flatMap(\.names)).count >= 2
             let p = Process()
             p.executableURL = helper
             p.arguments = [directory.appending(path: "system.wav").path, rawTurns.path, String(minimum)]
@@ -71,7 +72,7 @@ enum MeetingProcessing {
             if matchVoices, let data = try? Data(contentsOf: embeddings),
                let windows = try? JSONDecoder().decode([MeetingVoiceMatching.Window].self, from: data) {
                 turns = MeetingVoiceMatching.annotate(turns, windows: windows, samples: samples, mic: mic,
-                                                     micStart: micStart, systemStart: systemStart)
+                                                     micStart: micStart, systemStart: systemStart, saved: saved, enrollment: enrollment)
             }
             try JSONEncoder().encode(turns).write(to: output, options: .atomic)
             return turns
@@ -101,7 +102,8 @@ enum MeetingProcessing {
         return String(text[..<range.lowerBound])
     }
 
-    static func process(_ directory: URL) async throws -> (String, String) {
+    static func process(_ directory: URL, saved: [String: [[Float]]] = [:], prepareProfiles: Bool = false)
+        async throws -> (String, [String: [VoiceExample]]) {
         try await waitForClosedAudio(directory)
         let micFile = directory.appending(path: "mic.wav"), sysFile = directory.appending(path: "system.wav")
         let mic = try await recognize(micFile)
@@ -115,13 +117,16 @@ enum MeetingProcessing {
         let minimum = MeetingTranscript.minimumVoices(mic: mic, system: system, samples: samples,
                                                      micStart: micDate, systemStart: sysDate)
         var warning = ""
+        var examples: [String: [VoiceExample]] = [:]
+        let enrollment: (([String: [VoiceExample]]) -> Void)? = prepareProfiles ? { examples = $0 } : nil
         let turns: [MeetingVoice]
-        do { turns = try diarize(directory, minimum: minimum, samples: samples, mic: mic, micStart: micDate, systemStart: sysDate) } catch {
+        do { turns = try diarize(directory, minimum: minimum, samples: samples, mic: mic, micStart: micDate, systemStart: sysDate, saved: saved, enrollment: enrollment) } catch {
             turns = []
             warning = "Разделение голосов недоступно. " + error.localizedDescription
         }
+        var attributed = [AttributedWord]()
         let transcript = MeetingTranscript.render(mic: mic, system: system, turns: turns, samples: samples,
-                                                  micStart: micDate, systemStart: sysDate)
+                                                  micStart: micDate, systemStart: sysDate, collectWords: { attributed = $0 })
         guard !transcript.isEmpty else { throw MeetingIssue("Spokenly не нашёл речи в этих дорожках.") }
         let names = Set(samples.flatMap(\.names)).sorted()
         var summary = "Zoom: \(samples.filter { !$0.names.isEmpty }.count) из \(samples.count) наблюдений с именем" +
@@ -129,12 +134,18 @@ enum MeetingProcessing {
         let pairCount = samples.filter { $0.peer != nil }.count
         let matchedTurns = turns.filter { $0.matches?.isEmpty == false }.count
         summary += " Состав один на один подтверждён в \(pairCount) наблюдениях. Голосовые совпадения найдены в \(matchedTurns) интервалах."
+        let count = attributed.filter(\.named).count
+        if !attributed.isEmpty {
+            summary += String(format: " Именами подписано %d из %d слов удалённой дорожки (%.1f%%).",
+                              count, attributed.count, 100 * Double(count) / Double(attributed.count))
+        }
+        try JSONEncoder().encode(attributed).write(to: directory.appending(path: "speaker-words.json"), options: .atomic)
         try (summary + "\n" + warning).write(to: directory.appending(path: "summary.txt"), atomically: true, encoding: .utf8)
         try transcript.write(to: directory.appending(path: "transcript.txt"), atomically: true, encoding: .utf8)
         let chat = try MeetingChat.load(directory)
         let combined = transcript + MeetingChat.section(chat)
         try combined.write(to: directory.appending(path: "meeting.txt"), atomically: true, encoding: .utf8)
         try? FileManager.default.removeItem(at: directory.appending(path: "error.txt"))
-        return (combined, [summary, warning].filter { !$0.isEmpty }.joined(separator: " "))
+        return (combined, examples)
     }
 }

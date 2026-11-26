@@ -45,6 +45,14 @@ func checkMeetingTranscripts(_ check: (String, Bool) -> Void) {
         }
         return MeetingVoiceMatching.annotate(voiceTurns, windows: windows, samples: voiceSamples, mic: mic, micStart: date, systemStart: date)
     }
+    let learnedVector = [Float(1)] + Array(repeating: Float.zero, count: 255)
+    let lookup = [MeetingVoiceMatching.Window(startTime: 41, endTime: 45, embedding256: learnedVector)]
+    let visible = (41...45).map { ZoomSample(time: date.addingTimeInterval(Double($0)), names: [], status: "no-border", windows: 1, nodes: 8, roster: ["Anna", "Boris"]) }
+    let saved = ["Anna": [learnedVector, learnedVector]]
+    let reused = MeetingVoiceMatching.annotate(voiceTurns, windows: lookup, samples: visible, mic: [], micStart: date, systemStart: date, saved: saved)
+    check("сохранённый профиль применим к присутствующему участнику", reused.last?.matches?.first?.name == "Anna")
+    let absent = MeetingVoiceMatching.annotate(voiceTurns, windows: lookup, samples: [], mic: [], micStart: date, systemStart: date, saved: saved)
+    check("прошлое имя без текущего состава не присваивается", absent.last?.matches == nil)
     let attributed = MeetingTranscript.render(mic: [], system: [MeetingWord(start: 41, end: 42, text: "снова")],
         turns: matched(1, 0), samples: voiceSamples, micStart: date, systemStart: date)
     check("образцы из двух реплик называют тот же голос в новом кластере", attributed.contains("Anna — снова"))
