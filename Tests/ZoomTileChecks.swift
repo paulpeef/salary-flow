@@ -78,6 +78,26 @@ func checkZoomTiles(_ check: (String, Bool) -> Void) {
     check("Speaker с одной боковой миниатюрой", MeetingZoomBanner.featuredTiles([stage,sideTile], window: window, speakerView: true).map(\.name) == ["C"])
     check("Speaker со скрытыми миниатюрами", MeetingZoomBanner.featuredTiles([stage], window: window, speakerView: true).map(\.name) == ["C"])
     check("одиночная миниатюра не считается сценой", MeetingZoomBanner.featuredTiles([sideTile], window: window, speakerView: true).isEmpty)
+    var panel = MeetingAX.Layout(pid: 1, frame: window, roster: ["C": .on], floating: true, complete: true)
+    func floatingName(_ tiles: [MeetingAX.Tile]) -> String? {
+        MeetingZoomBanner.floatingSpeaker(in: screenshot, window: window, tiles: tiles, layout: panel)
+    }
+    check("плавающее окно во время шэринга отдаёт имя без рамки и видимой подписи", floatingName([stage]) == "C")
+    check("миниатюра в плавающем окне не определяет говорящего", floatingName([sideTile]) == nil)
+    panel.roster["A"] = .on
+    check("несколько участников в плавающем окне не определяют говорящего", floatingName([stage, sideTile]) == nil)
+    panel.roster.removeValue(forKey: "A")
+    panel.fixedVideo = true
+    check("закреплённое плавающее видео не определяет говорящего", floatingName([stage]) == nil)
+    panel.fixedVideo = false
+    panel.muted = ["C"]
+    check("выключенный микрофон в плавающем окне не определяет говорящего", floatingName([stage]) == nil)
+    panel.muted.removeAll()
+    panel.viewMode = .gallery
+    check("галерея в плавающем окне не определяет говорящего по одной плитке", floatingName([stage]) == nil)
+    panel.viewMode = nil
+    panel.complete = false
+    check("неполные данные плавающего окна не определяют говорящего", floatingName([stage]) == nil)
     check("имя из отдельного значения Accessibility", MeetingAX.statusName(role: "AXStaticText", description: "Active speaker", value: "Мария") == "Мария")
     check("имя участника без признака речи не используется", MeetingAX.statusName(role: "AXGroup", description: "Participant", value: "Мария") == nil)
     layout.inspect(role: "AXGroup", labels: ["Example Person, Pinned"])

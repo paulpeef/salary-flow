@@ -180,7 +180,7 @@ enum MeetingZoomBanner {
         return Array(featured)
     }
 
-    static func panelCaption(in image: CGImage, tiles: [MeetingAX.Tile]) -> String? {
+    private static func panelCaption(in image: CGImage, roster: Set<String>) -> String? {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.recognitionLanguages = ["en-US", "ru-RU"]
@@ -194,9 +194,8 @@ enum MeetingZoomBanner {
         let box = line.boundingBox
         guard box.minX <= 0.18, box.minY <= 0.18, box.midY < 0.24, box.height < 0.22 else { return nil }
         let name = text.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        let known = Set(tiles.map(\.name))
-        if !known.isEmpty {
-            guard known.count == 1, let original = known.first,
+        if !roster.isEmpty {
+            guard let original = roster.first,
                   original.caseInsensitiveCompare(name) == .orderedSame else { return nil }
             return original
         }
@@ -204,6 +203,27 @@ enum MeetingZoomBanner {
         guard name.count <= 100, name.contains(where: \.isLetter),
               name.unicodeScalars.allSatisfy(allowed.contains) else { return nil }
         return name
+    }
+
+    static func floatingSpeaker(in image: CGImage, window: CGRect, tiles: [MeetingAX.Tile], layout: MeetingAX.Layout?) -> String? {
+        if let layout {
+            guard layout.complete, !layout.fixedVideo,
+                  layout.viewMode == nil || layout.viewMode == .speaker else { return nil }
+        }
+        let roster = layout.map { Set($0.roster.keys) } ?? Set(tiles.map(\.name))
+        guard roster.count <= 1 else { return nil }
+        if let name = roster.first, layout?.muted.contains(name) == true { return nil }
+        // The Zoom sharing toolbar can cover the badge. A sole video tile
+        // filling the floating panel still exposes its name in Accessibility.
+        if let name = roster.first, layout != nil {
+            let fillsPanel = tiles.contains { tile in
+                let visible = tile.frame.intersection(window)
+                return tile.name == name && visible.width >= window.width * 0.5 &&
+                    visible.height >= window.height * 0.5
+            }
+            if fillsPanel { return name }
+        }
+        return panelCaption(in: image, roster: roster)
     }
 
     static func badgeNames(at frame: CGRect, in image: CGImage, window: CGRect, roster: Set<String>) -> Set<String> {
@@ -340,7 +360,7 @@ enum MeetingZoomBanner {
         try? VNImageRequestHandler(cgImage: image).perform([req])
         let banners = Set((req.results ?? []).compactMap { $0.topCandidates(1).first.flatMap { MeetingAX.speakerName($0.string) } })
         if banners.isEmpty, layout?.fixedVideo != true {
-            if panel, (layout == nil || layout?.complete == true), let name = panelCaption(in: image, tiles: matching) {
+            if panel, let name = floatingSpeaker(in: image, window: window.frame, tiles: matching, layout: layout) {
                 return Observation(names: [name], status: "sharing-panel", capturedAt: capturedAt)
             }
             if !panel, let layout, var observation = featuredObservation(in: image, window: window.frame, tiles: matching, layout: layout) {
